@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Enable once per clone: git config core.hooksPath .githooks
+subject=$(grep -v '^#' "$1" | head -n1)
+case "$subject" in
+  fixup!*|squash!*|amend!*) exit 0 ;;
+esac
+exec "$(git rev-parse --show-toplevel)/scripts/check-conventional.sh" --subject "$subject"

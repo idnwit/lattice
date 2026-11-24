@@ -29,14 +29,15 @@
 
 ## Commits and PRs
 
-- Conventional Commits for every commit and every PR title: `feat(relay): address-bound tokens`.
+- Conventional Commits for **every commit** and every PR title: `feat(relay): address-bound tokens`. Subject ≤ 72 chars.
 - Types: `feat` `fix` `perf` `refactor` `docs` `test` `build` `ci` `chore` `revert`. Breaking change: `!` after type/scope.
 - Scope = area: `transport`, `relay`, `sync`, `proc`, `latticed`, `deck`, `apps`, `layouts`, `pair`, `ui`, `docs`, `ci`.
 - Subject: lowercase start, imperative, no trailing period.
 - `main` changes only through a PR. Never push to `main` directly.
 - Branch names: `<type>/<short-slug>` (`feat/relay-register`).
-- Merge method: squash only. The PR title becomes the commit on `main`; CI checks it (`conventional-title`).
-- Required checks: `ci-ok` (fmt, clippy, test on Linux + macOS) and `conventional-title`.
+- Merge method: **rebase only**. Every PR commit lands on `main` as-is, so each must be a clean, conventional, self-contained commit. No merge commits; rebase onto `main` instead.
+- Local check: `git config core.hooksPath .githooks` once per clone (commit-msg hook runs `scripts/check-conventional.sh`).
+- Required checks: `ci-ok` (fmt, clippy, tests), `conventional-title`, `conventional-commits`.
 - Releases: release-plz opens a release PR from commits on `main`. Merging it tags `vX.Y.Z` and creates a GitHub release. Never bump versions by hand.
 - Commit, push, or open PRs only when asked.
 

@@ -11,7 +11,7 @@ Everything syncs as streams (Log, State, Series, Doc). Features are WASM **apps*
 Coding agents (claude-code, codex, …) run on workers and show as **TTY** or **Visual** views.
 
 Repo: https://github.com/idnwit/lattice · crate `lattice` (Rust, edition 2024). Early stage: specs lead, code follows.
-Workflow: PR-only to `main`, squash merge, Conventional Commits, release-plz (see `.rules/engineering.md`).
+Workflow: PR-only to `main`, rebase merge, Conventional Commits on every commit, release-plz (see `.rules/engineering.md`).
 
 ## Map
 

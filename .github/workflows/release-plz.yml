@@ -9,7 +9,7 @@ on:
 #
 # Events created with GITHUB_TOKEN do not start other workflows, except
 # workflow_dispatch. After opening/updating the release PR, this workflow
-# dispatches the real required checks (CI and PR title) on the PR branch.
+# dispatches the real required checks (CI, PR title, commits) on the PR branch.
 # Tags pushed by the release job also do not start workflows; build release
 # artifacts inside the release job (`releases_created`) if needed.
 
@@ -68,5 +68,5 @@ jobs:
             exit 0
           fi
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
-          gh workflow run pr-title.yml --repo "$GITHUB_REPOSITORY" --ref "$branch" -f pr="$number"
-          echo "Dispatched CI and PR-title checks for #$number ($branch)."
+          gh workflow run conventional.yml --repo "$GITHUB_REPOSITORY" --ref "$branch" -f pr="$number"
+          echo "Dispatched CI and conventional checks for #$number ($branch)."
