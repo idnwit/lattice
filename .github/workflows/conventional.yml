@@ -1,0 +1,57 @@
+name: Conventional
+
+# main is merged by rebase: every commit lands on main as-is.
+# So both the PR title and every commit subject must be Conventional Commits.
+#
+# workflow_dispatch: PRs opened with GITHUB_TOKEN (release-plz) do not start
+# pull_request workflows. release-plz.yml dispatches this workflow on the PR
+# branch so the same checks run for real.
+#
+# One job per check name: a duplicate job name would report `skipped`, and a
+# skipped check can satisfy a required status check.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to check
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  title:
+    name: conventional-title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check PR title
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+        run: |
+          title=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title --jq .title)
+          scripts/check-conventional.sh --subject "$title"
+
+  commits:
+    name: conventional-commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check every commit in the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+        run: |
+          read -r base head < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '"\(.base.sha) \(.head.sha)"')
+          git fetch --no-tags origin "$base" "$head"
+          scripts/check-conventional.sh --range "$base..$head"
