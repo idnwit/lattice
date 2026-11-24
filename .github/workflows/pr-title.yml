@@ -2,10 +2,19 @@ name: PR title
 
 # Squash merge uses the PR title as the commit message on main.
 # It must follow Conventional Commits so release-plz can build the changelog.
+#
+# workflow_dispatch: PRs opened with GITHUB_TOKEN (release-plz) do not start
+# pull_request workflows. release-plz.yml dispatches this workflow on the PR
+# branch so the same title check runs for real.
 
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to check
+        required: true
 
 permissions:
   pull-requests: read
@@ -13,6 +22,7 @@ permissions:
 jobs:
   conventional:
     name: conventional-title
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: amannn/action-semantic-pull-request@v6
@@ -34,3 +44,21 @@ jobs:
           subjectPattern: ^[a-z].+[^.]$
           subjectPatternError: |
             Subject "{subject}" must start lowercase and must not end with a period.
+
+  conventional-dispatch:
+    name: conventional-title
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+        run: |
+          title=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title --jq .title)
+          echo "Title: $title"
+          re='^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: [a-z].*[^.]$'
+          if [[ ! "$title" =~ $re ]]; then
+            echo "::error::PR title is not a Conventional Commit: $title"
+            exit 1
+          fi
