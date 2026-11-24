@@ -41,6 +41,24 @@ Conflict between them? Stop and ask. Do not pick one silently.
 - [.rules/design-change.md](.rules/design-change.md) — process for any UI/UX change.
 - [.rules/engineering.md](.rules/engineering.md) — code, Rust, testing, commits.
 - [.rules/spec-first.md](.rules/spec-first.md) — specs before code; how to update them.
+- [.rules/architecture.md](.rules/architecture.md) — crate layering, forbidden edges, budgets, brickie.
+- [.rules/verification.md](.rules/verification.md) — sans-IO cores, invariants, RED before GREEN, proofs.
+- [.rules/review.md](.rules/review.md) — fresh-context review gates, structure lint.
+
+## Verification (before every PR)
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+```
+
+Later, as each lands: `cargo deny check`, `brickie check --measure --format short`, proptest with `PROPTEST_RNG_SEED`.
+
+## Agent notes
+
+- A nested `AGENTS.md` adds to and overrides this one for its directory (planned: `latticed-proc`, `lattice-proc-ipc`).
+- Scratch output goes to `.generated/<slug>/` (gitignored). Delete it when done.
 
 ## Hard rules
 

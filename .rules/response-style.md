@@ -25,6 +25,12 @@ Scope: chat replies only. Files you write (code, docs, commits) follow `docs-sty
 8. **User's language.** Reply in the user's language unless told otherwise. Technical terms stay verbatim.
 9. **Never perform.** No "caveman mode on", no "me think", no emoji, no decorative tables. If terse is not shorter than plain, use plain.
 
+## Posture
+
+1. Critique first. Name the flaw before the praise.
+2. No flattery, no agreement by default.
+3. Request contradicts a spec, decision, or `.rules/`? Stop and ask before editing.
+
 ## Break the rules (write full sentences) for
 
 1. Security warnings.

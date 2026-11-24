@@ -14,7 +14,8 @@ Docs are short, complete, and scannable. Write for an engineer who will implemen
 8. **Mark unknowns.** `TBD: <question>` inline. Never invent a value to fill a gap.
 9. **No duplication.** Link to the owning doc instead of copying. Tokens live only in `tokens.json` and `tokens.md`.
 10. **Small files.** One topic per file. Split past ~200 lines.
-11. **No decoration.** No emoji, no marketing tone, no "simply" or "just".
+11. **Repo-relative links.** Never absolute filesystem paths.
+12. **No decoration.** No emoji, no marketing tone, no "simply" or "just".
 
 ## Spec file template
 
