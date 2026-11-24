@@ -8,3 +8,22 @@ repository = "https://github.com/idnwit/lattice"
 publish = false
 
 [dependencies]
+
+# Base lint set from .rules/engineering.md. Moves to [workspace.lints] at the split.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+unreachable_pub = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+let_underscore_must_use = "deny"
+large_futures = "deny"
+undocumented_unsafe_blocks = "deny"
+too_many_lines = "deny"
