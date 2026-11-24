@@ -22,6 +22,7 @@ Workflow: PR-only to `main`, rebase merge, Conventional Commits on every commit,
 | `docs/specs/` | Feature specs. Source of truth for user-visible behavior |
 | `docs/design-system/` | Lattice design system: tokens, components, patterns |
 | `docs/design-system/tokens.json` | Machine-readable tokens. Code imports from here |
+| `docs/images/` | README screenshots, rendered from the design canvas. Re-render when the canvas changes |
 | `.rules/` | Working rules. All apply, always |
 | `src/` | Rust source |
 
