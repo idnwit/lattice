@@ -1,0 +1,50 @@
+name: Release-plz
+
+on:
+  push:
+    branches: [main]
+
+# RELEASE_PLZ_TOKEN: fine-grained PAT (or GitHub App token) with Contents + Pull requests read/write.
+# Without it, GITHUB_TOKEN is used and CI does not run on the release PR (close/reopen it to trigger CI).
+
+jobs:
+  release-plz-release:
+    name: Release-plz release
+    if: ${{ github.repository_owner == 'idnwit' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    if: ${{ github.repository_owner == 'idnwit' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}

@@ -1,0 +1,10 @@
+[workspace]
+# Never published to crates.io. Versions come from git tags (v{{ version }}).
+git_only = true
+changelog_update = true
+git_tag_enable = true
+git_release_enable = true
+# Binary crate; cargo-semver-checks only works on libraries.
+semver_check = false
+# Release only when the release PR is merged, not on every push.
+release_always = false

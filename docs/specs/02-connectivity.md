@@ -1,0 +1,49 @@
+# 02 — Connectivity and sync
+
+Status: draft
+Owns: user-visible link behavior, worker states, device sync states.
+Mechanism: [architecture/01-transport.md](../architecture/01-transport.md), [02-sync.md](../architecture/02-sync.md).
+
+## Summary
+
+Every connection starts on a relay, so it is usable at once. It upgrades to a direct path by hole punching in the background.
+All traffic is QUIC, end-to-end encrypted between nodes. Relays see only ciphertext.
+The user's devices sync settings and layouts with each other directly. No server holds the plaintext.
+
+## Link
+
+1. Connect = dial the worker's NodeId. Traffic flows over the relay immediately.
+2. In parallel, both sides probe for a direct path. When it works, traffic moves to it without interruption.
+3. Symmetric NAT or failed punch → stay on relay (`staying on relay (rtt 64ms)`).
+4. Path changes (NAT rebinding, wifi → cellular) migrate inside the same QUIC connection. Sessions do not restart.
+5. Lost connection (e.g. mobile app backgrounded) → reconnect and resume every stream from its cursor. Workers keep all state.
+6. Link type and RTT are always visible: worker card, pane header, status bar (`direct · 18ms`, `relay · 64ms`).
+
+## Worker states
+
+| State | Glyph | Meaning |
+|---|---|---|
+| online | dot | Direct path up |
+| relay | ring | Reachable via relay only |
+| offline | dim ring | Asleep or unreachable. Shows `asleep · 3h` |
+| error | square | Link lost |
+
+- Offline worker: panel shows "Asleep. Sessions restore when it wakes." and `Wake`. TBD: wake mechanism (Wake-on-LAN via another worker on the LAN?).
+
+## Device sync
+
+Synced between the user's decks (user `Doc`, E2E): device list, worker list, session list and layouts, port-forward config, app and extension settings, app/layout definitions.
+Read live from workers, not copied between decks: terminal content, file content, agent events.
+
+| Sync state | Text |
+|---|---|
+| synced | `sync · up to date` + `3 workers · 7 sessions · 2 agents` |
+| syncing | `sync · syncing` + what (`pushing session layout`) |
+| offline | `sync · offline` — workers still reachable, other devices may be stale |
+
+TBD: the canvas labels these `cloud · …`. Rename in the design (design-change process).
+
+## Open questions
+
+- TBD: relay regions and selection.
+- TBD: is the optional ciphertext store on by default?

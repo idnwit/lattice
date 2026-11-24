@@ -1,0 +1,10 @@
+[package]
+name = "lattice"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Peer-to-peer terminal: workers run processes, decks show and steer them."
+repository = "https://github.com/idnwit/lattice"
+publish = false
+
+[dependencies]
