@@ -19,13 +19,15 @@ on:
 permissions:
   pull-requests: read
 
+# One job only: a second job with the same name would report `skipped`,
+# and a skipped check can satisfy a required status check.
 jobs:
   conventional:
     name: conventional-title
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@v6
+      - if: github.event_name == 'pull_request'
+        uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -44,13 +46,8 @@ jobs:
           subjectPattern: ^[a-z].+[^.]$
           subjectPatternError: |
             Subject "{subject}" must start lowercase and must not end with a period.
-
-  conventional-dispatch:
-    name: conventional-title
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check PR title
+      - name: Check PR title (dispatch)
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ inputs.pr }}
