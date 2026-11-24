@@ -36,7 +36,7 @@
 - `main` changes only through a PR. Never push to `main` directly.
 - Branch names: `<type>/<short-slug>` (`feat/relay-register`).
 - Merge method: squash only. The PR title becomes the commit on `main`; CI checks it (`conventional-title`).
-- Required checks: `ci-ok` (fmt, clippy, test on Linux + macOS) and `conventional-title`.
+- Required checks: `ci-ok` (fmt, clippy, test on Linux) and `conventional-title`. macOS tests run on `main` only and are not required.
 - Releases: release-plz opens a release PR from commits on `main`. Merging it tags `vX.Y.Z` and creates a GitHub release. Never bump versions by hand.
 - Commit, push, or open PRs only when asked.
 
