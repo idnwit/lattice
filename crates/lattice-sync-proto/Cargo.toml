@@ -1,0 +1,16 @@
+[package]
+name = "lattice-sync-proto"
+description = "Node-to-node sync wire messages (Hello, Subscribe, Change, Action) and framing. Sans-IO."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lattice-key.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

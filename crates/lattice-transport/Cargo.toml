@@ -1,0 +1,16 @@
+[package]
+name = "lattice-transport"
+description = "Transport contract: Transport and Conn traits, PathInfo, path-selection FSM. Sans-IO."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes.workspace = true
+lattice-key.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

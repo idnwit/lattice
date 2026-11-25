@@ -38,7 +38,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
   # macOS is disabled for now: hosted macOS runners never start for this org.
   # Re-add a macos job (not required by ci-ok) once runners are available.
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features --locked
+      - run: cargo test --workspace --all-features --locked
 
   # Required check. Fan-in so branch rules need only one name.
   ci-ok:

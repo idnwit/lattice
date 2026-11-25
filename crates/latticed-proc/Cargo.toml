@@ -1,0 +1,18 @@
+[package]
+name = "latticed-proc"
+description = "Frozen process daemon: PTYs, children, ring buffer, IPC server. Sync, poll-based."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Only lattice-proc-ipc, rustix, std (.rules/architecture.md, forbidden edges).
+[dependencies]
+lattice-proc-ipc.workspace = true
+rustix.workspace = true
+
+# TBD: own lint table with unsafe_code = "deny" once the PTY spawn lands
+# (.rules/engineering.md, Lints). Workspace lints forbid unsafe until then.
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "lattice"
+description = "Peer-to-peer terminal: workers run processes, decks show and steer them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

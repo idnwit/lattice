@@ -1,0 +1,22 @@
+[package]
+name = "latticed"
+description = "Worker connectivity daemon: wires lattice-quic and the worker host."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lattice-key.workspace = true
+lattice-quic.workspace = true
+lattice-transport.workspace = true
+lattice-worker.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

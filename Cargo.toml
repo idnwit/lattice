@@ -1,21 +1,46 @@
-[package]
-name = "lattice"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
-description = "Peer-to-peer terminal: workers run processes, decks show and steer them."
+rust-version = "1.97"
 repository = "https://github.com/idnwit/lattice"
 publish = false
 
-[dependencies]
+[workspace.dependencies]
+# Internal crates (rows in .rules/architecture.md; edges in brickie.toml).
+lattice-key = { path = "crates/lattice-key" }
+lattice-proc-ipc = { path = "crates/lattice-proc-ipc" }
+lattice-transport = { path = "crates/lattice-transport" }
+lattice-relay-proto = { path = "crates/lattice-relay-proto" }
+lattice-sync-proto = { path = "crates/lattice-sync-proto" }
+lattice-quic = { path = "crates/lattice-quic" }
+lattice-worker = { path = "crates/lattice-worker" }
+lattice-deck-core = { path = "crates/lattice-deck-core" }
 
-# Base lint set from .rules/engineering.md. Moves to [workspace.lints] at the split.
-[lints.rust]
+# External crates. Each has a reason in the PR that adds it.
+anyhow = "1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = "2"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rustix = { version = "1", features = ["process", "pty", "termios", "event", "fs", "net"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Base lint set from .rules/engineering.md (Lints). Every crate sets `[lints] workspace = true`.
+[workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"
 unreachable_pub = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
