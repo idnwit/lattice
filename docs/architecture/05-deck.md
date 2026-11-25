@@ -13,10 +13,12 @@ The whole project is 100% Rust.
 
 | Order | Platform | UI backend | Notes |
 |---|---|---|---|
-| v1 | macOS 14+ | NSH → AppKit | First and only deck in v1 |
-| v2 | iOS / iPadOS 15+ | NSH → UIKit | Sideloaded (own signing), not App Store |
+| v1 | macOS 14+ | NSH → AppKit | Desktop views |
+| v1 | iOS / iPadOS 15+ | NSH → UIKit | Mobile views. Sideloaded (own signing), not App Store |
 | later | Web | NSH → DOM + WASM core | Needs WebTransport relay (transport.md › Web) |
 | no | Windows, Android | — | Not planned |
+
+macOS and iOS share one deck core and one app crate. Only the views differ: desktop workspace vs mobile screens (design-system patterns).
 
 ## Structure
 
@@ -56,7 +58,8 @@ UI (NSH, pure Rust)
 
 ## Risks
 
-- NSH is ~6 weeks old (v0.6, 2026-11). API churn expected. Keep NSH behind our own UI module boundary.
-- Docs mention building with a Cargo fork. TBD: verify plain `cargo` works.
+- NSH is young (v0.7.0, pinned `=0.7.0`). API churn expected. NSH stays inside `lattice-deck` (D20).
+- Verified 2026-11-25 with NSH 0.7.0: plain `cargo build` and `cargo run` work on macOS; the iOS simulator runs through the `nsh` CLI (09-platform-l1.md).
+- The NSH `Terminal` element uses its own ANSI palette, not our tokens. The demo draws styled text instead.
 - TBD: verify sideload (development / ad-hoc) `.ipa` packaging for iOS.
 - TBD: Terminal element VT coverage and throughput under heavy output.

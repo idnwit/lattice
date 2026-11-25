@@ -5,7 +5,7 @@ Owns: product scope, glossary, system components.
 
 ## Summary
 
-Lattice is a peer-to-peer terminal. A user pairs **workers** (their machines) and **decks** (control centers: macOS first, then iOS; web later) into one signed device list.
+Lattice is a peer-to-peer terminal. A user pairs **workers** (their machines) and **decks** (control centers: macOS and iOS; web later) into one signed device list.
 Decks open **sessions** on workers over an E2E-encrypted, relay-first P2P link.
 Coding **agents** run inside sessions and can be watched and steered as raw terminal or as a visual event view.
 There is no trusted server. Hosted services (relay, discovery, optional ciphertext store) never see content.
@@ -30,7 +30,7 @@ Platform design: [../architecture/README.md](../architecture/README.md).
 | `latticed-proc` | Worker | Frozen process daemon. Owns PTYs and children, raw output ring. Never restarts |
 | `latticed` | Worker | Upgradable connectivity daemon. Transport, sync, VT emulation, app host, hooks, files, SSH endpoint |
 | `lattice` CLI | Worker, desktop | `lattice pair`, `lattice session …`, `lo <file>`, app/layout dev tools |
-| Deck | macOS (v1), iOS (v2), web (later) | Rust core (transport, sync, layouts) + NSH UI. 100% Rust |
+| Deck | macOS and iOS (v1), web (later) | Rust core (transport, sync, layouts) + NSH UI. 100% Rust |
 | Relay | Public (ours) or self-hosted | UDP forwarder: registration, first path, hole-punch coordination, fallback. Sees ciphertext only |
 | Ciphertext store | Later, optional | Mailbox/backup for device sync while peers are offline |
 

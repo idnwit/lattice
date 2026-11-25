@@ -5,7 +5,7 @@ Owns: system layering, component boundaries, cross-cutting principles.
 
 ## Summary
 
-Lattice has two kinds of nodes: **workers** (run processes) and **decks** (the user's control centers — show and steer workers). v1 deck: macOS. Then iOS. Web later.
+Lattice has two kinds of nodes: **workers** (run processes) and **decks** (the user's control centers — show and steer workers). v1 decks: macOS and iOS. Web later.
 There is no trusted server. Nodes talk end-to-end encrypted over a relay-first P2P transport.
 Everything above the transport is a **sync** of signed, append-only streams plus snapshots.
 Product features are **apps** on top of a generic platform.
@@ -65,6 +65,7 @@ Product features are **apps** on top of a generic platform.
 | 06 | [apps.md](06-apps.md) | App model, manifest, kinds, permissions, runtimes |
 | 07 | [layouts.md](07-layouts.md) | Layout data model and generation |
 | 08 | [infrastructure.md](08-infrastructure.md) | Relay, discovery, optional ciphertext store |
+| 09 | [platform-l1.md](09-platform-l1.md) | Layer 1 crates, skeleton status, contract tests, open TBDs |
 | — | [decisions.md](decisions.md) | Decision log and open questions |
 
 ## Naming

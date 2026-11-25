@@ -5,7 +5,7 @@ Entry point for AI agents and humans working in this repo. Read this first, then
 ## Project
 
 **Lattice** — a peer-to-peer terminal for engineers who live in the shell.
-Two node types: **workers** (run processes: `latticed-proc` + `latticed`) and **decks** (control centers: macOS first, then iOS; web later). 100% Rust, UI on NSH.
+Two node types: **workers** (run processes: `latticed-proc` + `latticed`) and **decks** (control centers: macOS and iOS; web later). 100% Rust, UI on NSH.
 Nodes talk E2E-encrypted over QUIC, relay-first then direct. No trusted server.
 Everything syncs as streams (Log, State, Series, Doc). Features are WASM **apps** on a generic platform; **layouts** are data.
 Coding agents (claude-code, codex, …) run on workers and show as **TTY** or **Visual** views.
@@ -24,7 +24,8 @@ Workflow: PR-only to `main`, rebase merge, Conventional Commits on every commit,
 | `docs/design-system/tokens.json` | Machine-readable tokens. Code imports from here |
 | `docs/images/` | README screenshots, rendered from the design canvas. Re-render when the canvas changes |
 | `.rules/` | Working rules. All apply, always |
-| `src/` | Rust source |
+| `crates/` | Rust workspace. One crate per brick in `brickie.toml` |
+| `brickie.toml` | Crate graph: bricks, rules, links. Edit only with `brickie design` |
 
 ## Sources of truth
 
@@ -53,7 +54,11 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 ```
 
-Later, as each lands: `cargo deny check`, `brickie check --measure --format short`, proptest with `PROPTEST_RNG_SEED`.
+```sh
+brickie check --measure --format short
+```
+
+Later, as each lands: `cargo deny check`, proptest with `PROPTEST_RNG_SEED`.
 
 ## Agent notes
 

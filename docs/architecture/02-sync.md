@@ -37,7 +37,7 @@ Raw PTY bytes are a `Log` (scrollback, exact replay). The parsed screen is a sep
 
 ## Wire messages
 
-Carried on the control stream and per-stream channels (transport.md).
+Carried on the control stream and per-stream channels (transport.md). Encoding: postcard in `u32` length-prefixed frames (D19).
 
 | Message | Direction | Meaning |
 |---|---|---|
@@ -83,6 +83,5 @@ Rules:
 
 ## Open questions
 
-- TBD: payload encoding — postcard (Rust-native) vs CBOR (cross-language)?
 - TBD: retention defaults per kind (raw PTY ring size, event log age).
 - TBD: does `Series` need server-side query (range + resolution), or only subscribe?
