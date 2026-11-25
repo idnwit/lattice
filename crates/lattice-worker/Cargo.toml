@@ -1,0 +1,19 @@
+[package]
+name = "lattice-worker"
+description = "Worker host: latticed-proc client, process streams, serves deck connections."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lattice-key.workspace = true
+lattice-proc-ipc.workspace = true
+lattice-sync-proto.workspace = true
+lattice-transport.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+
+[lints]
+workspace = true

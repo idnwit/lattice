@@ -1,0 +1,5 @@
+# Pinned for NSH 0.7 (needs rustc >= 1.97). Bump deliberately.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt", "rust-analyzer", "rust-src"]
+targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim"]

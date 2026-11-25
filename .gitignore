@@ -1,2 +1,6 @@
-/target
+target/
 .generated/
+/.brickie/
+/.local-evident/
+/crates/lattice-deck/.nsh/
+.DS_Store

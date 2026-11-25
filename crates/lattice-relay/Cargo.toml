@@ -1,0 +1,21 @@
+[package]
+name = "lattice-relay"
+description = "Public UDP relay: forwards ciphertext, never decrypts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Only relay-proto and key: the relay never reaches sync or identity.
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lattice-key.workspace = true
+lattice-relay-proto.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

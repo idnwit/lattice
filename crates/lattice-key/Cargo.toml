@@ -1,0 +1,19 @@
+[package]
+name = "lattice-key"
+description = "NodeId and node key (ed25519): sign, verify, encode. No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ed25519-dalek.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+postcard = { workspace = true, features = ["use-std"] }
+
+[lints]
+workspace = true
