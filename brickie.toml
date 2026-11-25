@@ -1,0 +1,303 @@
+[[brick]]
+name = "key"
+members = ["path:crates/lattice-key/"]
+tags = ["base"]
+desc = "NodeId and node key (ed25519): sign, verify, encode. No I/O"
+
+[[brick]]
+name = "proc-ipc"
+members = ["path:crates/lattice-proc-ipc/"]
+tags = ["frozen"]
+desc = "latticed <-> latticed-proc TLV codec and v1 messages. Frozen v1"
+
+[[brick]]
+name = "transport"
+members = ["path:crates/lattice-transport/"]
+tags = ["contract"]
+desc = "Transport and Conn traits, PathInfo, path-selection FSM (sans-IO)"
+
+[[brick]]
+name = "relay-proto"
+members = ["path:crates/lattice-relay-proto/"]
+tags = ["contract"]
+desc = "Relay UDP wire codec, token table, relay engine and client registration FSM (sans-IO)"
+
+[[brick]]
+name = "sync-proto"
+members = ["path:crates/lattice-sync-proto/"]
+tags = ["contract"]
+desc = "Node-to-node sync wire messages (02-sync: Hello, Subscribe, Change, Action) and stream framing (sans-IO)"
+
+[[brick]]
+name = "quic"
+members = ["path:crates/lattice-quic/"]
+tags = ["adapter"]
+desc = "Magic socket (relay | direct under one virtual address) + quinn; implements Transport"
+
+[[brick]]
+name = "worker"
+members = ["path:crates/lattice-worker/"]
+tags = ["host"]
+desc = "Worker host: proc daemon client, process streams, serves deck connections"
+
+[[brick]]
+name = "deck-core"
+members = ["path:crates/lattice-deck-core/"]
+tags = ["host"]
+desc = "Deck host: worker links, sessions and panes model, input actions. No UI"
+
+[[brick]]
+name = "latticed-proc"
+members = ["path:crates/latticed-proc/"]
+tags = ["proc"]
+desc = "Frozen process daemon: PTYs, children, ring buffer, IPC server. Sync, poll-based"
+
+[[brick]]
+name = "latticed"
+members = ["path:crates/latticed/"]
+tags = ["bin"]
+desc = "Worker connectivity daemon: wires quic + worker host"
+
+[[brick]]
+name = "relay"
+members = ["path:crates/lattice-relay/"]
+tags = ["relay"]
+desc = "Public UDP relay: forwards ciphertext, never decrypts"
+
+[[brick]]
+name = "deck"
+members = ["path:crates/lattice-deck/"]
+tags = ["bin"]
+desc = "Deck app (macOS, iOS) on NSH: ui module (NSH views from props + tokens.json), wiring deck-core + quic"
+
+[[brick]]
+name = "cli"
+members = ["lattice"]
+tags = ["bin"]
+desc = "lattice CLI (pair, session, lattice-hook). Placeholder in layer 1"
+
+[[rule]]
+from = "tag:bin"
+to = "tag:adapter"
+reason = "binaries pick the concrete I/O"
+
+[[rule]]
+from = "tag:bin"
+to = "tag:contract"
+reason = "binaries build configs and ids for hosts"
+
+[[rule]]
+from = "tag:bin"
+to = "tag:base"
+reason = "binaries load node keys"
+
+[[rule]]
+from = "tag:host"
+to = "tag:contract"
+reason = "hosts speak the wire contracts"
+
+[[rule]]
+from = "tag:host"
+to = "tag:base"
+reason = "hosts name nodes"
+
+[[rule]]
+from = "tag:adapter"
+to = "tag:contract"
+reason = "adapters implement contract traits"
+
+[[rule]]
+from = "tag:adapter"
+to = "tag:base"
+reason = "adapters sign and verify with node keys"
+
+[[rule]]
+from = "tag:contract"
+to = "tag:base"
+reason = "contracts carry NodeId"
+
+[[rule]]
+from = "latticed-proc"
+to = "proc-ipc"
+reason = "frozen daemon reaches only proc-ipc, rustix, std (forbidden edges)"
+
+[[rule]]
+from = "relay"
+to = "relay-proto"
+reason = "relay runs the sans-IO relay engine"
+
+[[rule]]
+from = "relay"
+to = "key"
+reason = "relay verifies REGISTER signatures; never sync or identity (forbidden edges)"
+
+[[rule]]
+from = "worker"
+to = "proc-ipc"
+reason = "only the worker host speaks proc IPC v1 (trust boundary)"
+
+[[rule]]
+from = "latticed"
+to = "worker"
+reason = "the worker daemon runs the worker host, never the deck host"
+
+[[rule]]
+from = "deck"
+to = "deck-core"
+reason = "the deck app runs the deck host, never the worker host"
+
+[[link]]
+from = "transport"
+to = "key"
+kinds = ["uses"]
+reason = "Transport::connect takes a NodeId"
+
+[[link]]
+from = "relay-proto"
+to = "key"
+kinds = ["uses"]
+reason = "REGISTER carries NodeId and an ed25519 signature"
+
+[[link]]
+from = "sync-proto"
+to = "key"
+kinds = ["uses"]
+reason = "Hello carries NodeId"
+
+[[link]]
+from = "quic"
+to = "transport"
+reason = "implements Transport and Conn; drives the path FSM"
+
+[[link]]
+from = "quic"
+to = "relay-proto"
+kinds = ["uses"]
+reason = "magic socket registers, keeps alive, wraps SEND, unwraps RECV"
+
+[[link]]
+from = "quic"
+to = "key"
+kinds = ["uses"]
+reason = "TLS raw public keys from the node key"
+
+[[link]]
+from = "worker"
+to = "transport"
+kinds = ["uses"]
+reason = "accepts deck connections through the Transport trait only"
+
+[[link]]
+from = "worker"
+to = "sync-proto"
+kinds = ["uses"]
+reason = "serves Hello, List, Subscribe, Action"
+
+[[link]]
+from = "worker"
+to = "proc-ipc"
+kinds = ["uses"]
+reason = "client of latticed-proc over the unix socket"
+
+[[link]]
+from = "worker"
+to = "key"
+kinds = ["uses"]
+reason = "peer NodeId checks"
+
+[[link]]
+from = "deck-core"
+to = "transport"
+kinds = ["uses"]
+reason = "dials workers through the Transport trait only"
+
+[[link]]
+from = "deck-core"
+to = "sync-proto"
+kinds = ["uses"]
+reason = "subscribes to process streams, sends input actions"
+
+[[link]]
+from = "deck-core"
+to = "key"
+kinds = ["uses"]
+reason = "worker NodeIds"
+
+[[link]]
+from = "latticed-proc"
+to = "proc-ipc"
+kinds = ["uses"]
+reason = "IPC server side"
+
+[[link]]
+from = "latticed"
+to = "worker"
+kinds = ["uses"]
+reason = "runs the worker host"
+
+[[link]]
+from = "latticed"
+to = "quic"
+kinds = ["uses"]
+reason = "binds the magic socket"
+
+[[link]]
+from = "latticed"
+to = "key"
+kinds = ["uses"]
+reason = "loads the node key from disk"
+
+[[link]]
+from = "latticed"
+to = "transport"
+kinds = ["uses"]
+reason = "relay address and transport config"
+
+[[link]]
+from = "relay"
+to = "relay-proto"
+kinds = ["uses"]
+reason = "drives the relay engine from a UDP loop"
+
+[[link]]
+from = "relay"
+to = "key"
+kinds = ["uses"]
+reason = "relay node key"
+
+[[link]]
+from = "deck"
+to = "deck-core"
+kinds = ["uses"]
+reason = "runs the deck host"
+
+[[link]]
+from = "deck"
+to = "quic"
+kinds = ["uses"]
+reason = "binds the magic socket"
+
+[[link]]
+from = "deck"
+to = "key"
+kinds = ["uses"]
+reason = "loads the node key"
+
+[[link]]
+from = "deck"
+to = "transport"
+kinds = ["uses"]
+reason = "relay address and transport config"
+
+[[link]]
+from = "deck-core"
+to = "transport"
+kinds = ["implements"]
+scope = "test"
+reason = "contract tests drive the link over an in-memory fake transport"
+
+[[complexity]]
+bricks = "*"
+cognitive = 15
+lines = 60
+# Lattice crate graph. Owned by `brickie design`; never hand-edit (.rules/architecture.md).

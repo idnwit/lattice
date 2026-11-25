@@ -1,6 +1,6 @@
 # Architecture rules
 
-Crate layering, forbidden edges, and size budgets. The conceptual layers (L1–L4) live in `docs/architecture/README.md`. This file owns the crate graph until `brickie.toml` exists; then `brickie.toml` owns it and this file keeps the rules.
+Crate layering, forbidden edges, and size budgets. The conceptual layers (L1–L4) live in `docs/architecture/README.md`. `brickie.toml` owns the crate graph (bricks, rules, links). This file keeps the principles behind it.
 
 Adapted from luvox `BRICKIE.md` and `AGENTS.md`.
 
@@ -8,7 +8,7 @@ Adapted from luvox `BRICKIE.md` and `AGENTS.md`.
 
 1. Dependencies point down only. No cycles. Crates in the same row never depend on each other.
 2. Trust boundaries are missing edges. If a crate must not see something, it has no path to it.
-3. Concrete I/O (quinn, UDP sockets, wasmtime, NSH, alacritty) lives only in adapter crates (row 2). Core and contract crates (rows 3–5) do not depend on `tokio`, `quinn`, or sockets.
+3. Concrete I/O (quinn, UDP sockets, wasmtime, NSH, alacritty) lives in adapter crates (row 2) and binaries (row 0, wiring and I/O loops only). Hosts (row 1) may use `tokio`. Core and contract crates (rows 3–5) do not depend on `tokio`, `quinn`, or sockets.
 4. Binaries are thin composition roots: wiring and lifecycle only.
 5. Add a trait only at a real I/O or protocol boundary. No god-traits, no pass-through wrappers.
 6. Name adapters after what they wrap: `lattice-quic`, not `lattice-transport-impl`.
@@ -22,21 +22,21 @@ Row 0 is the top. A crate depends only on crates in lower rows.
 
 | Row | Kind | Crates |
 |---|---|---|
-| 0 | bin | `latticed-proc`, `latticed`, `lattice-deck` (macOS), `lattice-relay`, `lattice` (CLI + `lattice-hook`) |
-| 1 | host | `lattice-worker` (process host, app host wiring), `lattice-deck-core` (layout engine, view host), `lattice-ui-nsh` |
+| 0 | bin | `latticed-proc`, `latticed`, `lattice-deck` (macOS + iOS, NSH; its `ui` module is the only renderer), `lattice-relay`, `lattice` (CLI + `lattice-hook`) |
+| 1 | host | `lattice-worker` (process host, app host wiring), `lattice-deck-core` (layout engine, view host) |
 | 2 | adapter | `lattice-quic` (magic socket + quinn), `lattice-wasm` (wasmtime host), `lattice-vt` (`Emulator` + alacritty) |
 | 3 | core | `lattice-sync` (streams, compaction, Loro allowed), `lattice-layout` |
-| 4 | contract | `lattice-transport` (traits, `NodeId`, path-selection FSM), `lattice-identity`, `lattice-app-wit` (WIT, view-tree types), `lattice-relay-proto` (codec, token table) |
-| 5 | frozen | `lattice-proc-ipc` (TLV codec, v1 fixtures) |
+| 4 | contract | `lattice-transport` (traits, path-selection FSM), `lattice-sync-proto` (sync wire messages, framing), `lattice-identity`, `lattice-app-wit` (WIT, view-tree types), `lattice-relay-proto` (codec, token table, relay engine) |
+| 5 | base | `lattice-key` (`NodeId`, node key), `lattice-proc-ipc` (frozen: TLV codec, v1 fixtures) |
 
-TBD: confirm crate names and rows when the first crates land.
+Layer 1 (platform foundation) crates exist as skeletons: rows 0–2 and 4–5 above, minus `lattice-identity`, `lattice-app-wit`, `lattice-vt`, `lattice-wasm`, `lattice-sync`, `lattice-layout`. Map: [docs/architecture/09-platform-l1.md](../docs/architecture/09-platform-l1.md).
 
 ## Forbidden edges
 
 | From | Must not reach | Why |
 |---|---|---|
 | `latticed-proc` | anything but `lattice-proc-ipc`, `rustix`, std | Frozen daemon. Never restarts for upgrades |
-| any library | `lattice-ui-nsh` | Only `lattice-deck` renders |
+| any library | NSH crates | Only `lattice-deck` renders |
 | `lattice-sync` | `lattice-quic`, `quinn` | Sync is transport-agnostic |
 | `lattice-relay` | `lattice-sync`, `lattice-identity` | Relay sees only ciphertext |
 | `lattice-app-wit` | wasmtime | Contract, not host |
@@ -59,7 +59,7 @@ TBD: confirm crate names and rows when the first crates land.
 
 ## Brickie
 
-Applies once `brickie.toml` exists. Run `brickie llms.txt` for exact syntax.
+Run `brickie llms.txt` for exact syntax. Rows map to tags: `bin`, `host`, `adapter`, `contract`, `base`, `frozen`; `latticed-proc` (`proc`) and `lattice-relay` (`relay`) have their own narrow rules.
 
 - Never hand-edit `brickie.toml`. Change it only through `brickie design`.
 - Run `brickie design show` before every design edit. Never reuse a remembered base.

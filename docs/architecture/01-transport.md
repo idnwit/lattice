@@ -121,7 +121,7 @@ trait Conn {
 
 Nothing above L1 imports `quinn` types.
 
-## Mobile (iOS, v2)
+## Mobile (iOS)
 
 iOS kills background sockets. Decks reconnect and resume every stream by cursor (sync.md). Workers keep all state.
 

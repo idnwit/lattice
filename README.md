@@ -3,7 +3,7 @@
 A peer-to-peer terminal for engineers who live in the shell.
 
 - **Workers** run your processes: shells, dev servers, coding agents (claude-code, codex, …).
-- **Decks** show and steer them: macOS first, then iOS.
+- **Decks** show and steer them: macOS and iOS.
 - Nodes talk end-to-end encrypted over QUIC, relay first, then direct. No account, no trusted server.
 - Everything syncs as streams. Features are WASM apps. Layouts are data.
 

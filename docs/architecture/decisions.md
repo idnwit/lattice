@@ -12,7 +12,7 @@ Research date: 2026-11. Re-check versions before implementation.
 | D3 | L2 = upstream `quinn` over our own `AsyncUdpSocket` ("magic socket" picks relay or direct under one virtual address). `noq` multipath is the later upgrade | accepted | Mature upstream; terminal traffic tolerates switch hiccups; trait keeps the swap cheap | 01 |
 | D4 | One QUIC connection per peer pair; one stream per process | proposed | No cross-session head-of-line blocking | 01 |
 | D5 | Terminal output v1 = reliable stream; datagram screen-state mode later | proposed | Simple first | 01, 02 |
-| D6 | Platforms: worker macOS + Linux; deck macOS v1, iOS v2 (sideloaded), web later; no Windows | accepted | Native first removes WebTransport, JS trust, Safari limits | 05 |
+| D6 | Platforms: worker macOS + Linux; deck macOS and iOS in v1 (iOS sideloaded), web later; no Windows | accepted | Native first removes WebTransport, JS trust, Safari limits. iOS shares the whole deck core; only views differ | 05 |
 | D7 | 100% Rust. Deck UI on NSH (pure-Rust mode, native views) | accepted | Owner choice; one language | 05 |
 | D8 | One sync model: per-writer signed log + snapshot; kinds Log / State / Series / Doc | proposed | Covers terminal, events, metrics, config | 02 |
 | D9 | Loro CRDT for multi-writer Doc | proposed | Rust + movable tree, stable 1.x | 02 |
@@ -25,6 +25,9 @@ Research date: 2026-11. Re-check versions before implementation.
 | D16 | Agent-built apps: coding agents follow our docs + `lattice` CLI to build and deploy apps | accepted | Owner intent ("shape it by asking") | 06 |
 | D17 | Own status escape sequence (not herdr OSC 7501) | accepted | herdr is reference only | 04 |
 | D18 | Hosted = public UDP relay only; rate limits later. Ciphertext store optional, later | accepted | No account server | 08 |
+| D19 | Sync payload encoding = postcard, `u32` length-prefixed frames | accepted | 100% Rust; compact; serde. Cross-language not needed | 02 |
+| D20 | Layer 1 crate graph per `brickie.toml`: `lattice-key` (base) holds `NodeId`; sync wire messages in `lattice-sync-proto`; NSH lives in `lattice-deck` only | accepted | Same-row crates cannot share `NodeId`; NSH is I/O with one user | 09 |
+| D21 | Toolchain pinned in `rust-toolchain.toml` (1.100.0); MSRV 1.97 | accepted | NSH 0.7 needs rustc ≥ 1.97 | 05 |
 
 ## Rejected options
 
@@ -46,11 +49,10 @@ Research date: 2026-11. Re-check versions before implementation.
 2. UDP-blocked networks: add a TCP/WebSocket relay path later?
 3. Relay federation: deck and worker on different home relays?
 4. Recovery when every deck is lost: offer a recovery key?
-5. Payload encoding: postcard vs CBOR?
-6. NSH: verify plain `cargo` build, iOS sideload packaging, Terminal element throughput.
-7. iOS view parts: interpreter (Pulley / wasmi) on device, or run on worker?
-8. WIT world v1: exact host widget set and versioning scheme.
-9. App runtime on worker and deck: wasmtime component model (WASI 0.3) confirmed?
+5. NSH: iOS sideload packaging on a device; Terminal element throughput and token colors. (Plain `cargo` build and the iOS simulator are verified.)
+6. iOS view parts: interpreter (Pulley / wasmi) on device, or run on worker?
+7. WIT world v1: exact host widget set and versioning scheme.
+8. App runtime on worker and deck: wasmtime component model (WASI 0.3) confirmed?
 
 ## Sources
 
