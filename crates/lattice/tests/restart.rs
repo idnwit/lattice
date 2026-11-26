@@ -108,6 +108,7 @@ mod restart {
         cmd.env("LATTICE_PROC_SOCK", dir.join("p.sock"))
             .env("LATTICE_DATA_DIR", dir.join("data"))
             .env("TMPDIR", dir.join("tmp"))
+            .env_remove("XDG_RUNTIME_DIR")
             .env("HOME", dir)
             .env("SHELL", "/bin/sh")
             // The shell outlives the dir by a moment on hang-up: no history file to write.
@@ -118,7 +119,9 @@ mod restart {
     impl Daemons {
         /// (Re)starts `latticed`; returns its NodeId and address from `worker.addr`.
         async fn start_worker(&mut self) -> (NodeId, SocketAddr) {
-            let card = self.dir.join("tmp/lattice/worker.addr");
+            // The per-user runtime dir under $TMPDIR (specs/01-pairing.md, Files).
+            let uid = rustix::process::getuid().as_raw();
+            let card = self.dir.join(format!("tmp/lattice-{uid}/worker.addr"));
             drop(std::fs::remove_file(&card));
             let mut cmd = Command::new(&self.bins.latticed);
             env(&mut cmd, &self.dir).args(["--listen", "127.0.0.1:0", "--proc-sock"]);

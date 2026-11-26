@@ -23,10 +23,16 @@ pub struct ProcClient {
 }
 
 impl ProcClient {
-    /// Default socket of `latticed-proc` (04-worker.md, Local IPC): `$LATTICE_PROC_SOCK`,
-    /// else `$XDG_RUNTIME_DIR/lattice/proc.sock`, else `$TMPDIR/lattice/proc.sock`.
-    pub fn default_path() -> std::path::PathBuf {
-        lattice_proc_ipc::default_socket_path()
+    /// Default socket of `latticed-proc` for user `uid` (04-worker.md, Local IPC):
+    /// `$LATTICE_PROC_SOCK`, else `proc.sock` in [`ProcClient::runtime_dir`].
+    pub fn default_path(uid: u32) -> std::path::PathBuf {
+        lattice_proc_ipc::default_socket_path(uid)
+    }
+
+    /// The per-user runtime dir of user `uid`, shared by both daemons (specs/01-pairing.md,
+    /// Files): `proc.sock` and `worker.addr` live there.
+    pub fn runtime_dir(uid: u32) -> std::path::PathBuf {
+        lattice_proc_ipc::runtime_dir(uid)
     }
 
     /// Connects and exchanges `Hello`.

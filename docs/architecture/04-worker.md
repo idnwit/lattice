@@ -93,8 +93,8 @@ TBD: drop other vars of the terminal that started the daemon (`TERM_PROGRAM`, `T
 
 ## Local IPC (`latticed` ⇄ `latticed-proc`)
 
-- Unix socket `$XDG_RUNTIME_DIR/lattice/proc.sock`, mode 0700, peer uid check (`SO_PEERCRED` / `getpeereid`).
-- macOS has no `XDG_RUNTIME_DIR`: `$TMPDIR/lattice/proc.sock`, else `/tmp/lattice/proc.sock`. `LATTICE_PROC_SOCK` overrides the path (proposed, experiment).
+- Unix socket `proc.sock` in the per-user runtime dir (specs/01-pairing.md, Files), mode 0700, peer uid check (`SO_PEERCRED` / `getpeereid`).
+- `LATTICE_PROC_SOCK` overrides the path (proposed, experiment).
 - The daemon creates the directory with mode 0700. It refuses to start if a daemon already answers on the socket.
 - Frame: `u32 len | u16 type | u16 flags | TLV payload (u16 tag, u32 len, bytes)`.
 - Compatibility: `Hello{version, features}` first. Unknown tags ignored. Unknown types → `Error{unsupported}`. v1 semantics frozen; only optional tags added.

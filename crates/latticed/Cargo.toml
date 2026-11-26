@@ -16,6 +16,8 @@ lattice-package.workspace = true
 lattice-quic.workspace = true
 lattice-wasm.workspace = true
 lattice-worker.workspace = true
+# getuid: the per-user runtime dir (specs/01-pairing.md, Files).
+rustix.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

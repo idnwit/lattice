@@ -9,9 +9,30 @@ use anyhow::Context;
 /// The file `latticed add-deck` reads the listen port from.
 const CARD_FILE: &str = "worker.addr";
 
-/// `$TMPDIR/lattice` (created, mode 0700), shared with `latticed-proc`.
+/// This process's real user id.
+pub(crate) fn uid() -> u32 {
+    rustix::process::getuid().as_raw()
+}
+
+/// The per-user runtime dir, shared with `latticed-proc` (specs/01-pairing.md, Files).
+/// Created with mode 0700 if missing; refused unless private to this user.
 pub(crate) fn runtime_dir() -> anyhow::Result<PathBuf> {
-    crate::private_dir(&std::env::temp_dir().join("lattice"))
+    let dir = crate::private_dir(&lattice_worker::ProcClient::runtime_dir(uid()))?;
+    check_private(&dir, uid())?;
+    Ok(dir)
+}
+
+/// A real dir (no symlink), owned by `uid`, that no one else may open. A shared `/tmp`
+/// lets another user create `lattice-<uid>` first.
+fn check_private(dir: &Path, uid: u32) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(dir).with_context(|| format!("stat {}", dir.display()))?;
+    anyhow::ensure!(
+        meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0,
+        "runtime dir {} is not private: want a dir owned by uid {uid} with mode 0700",
+        dir.display()
+    );
+    Ok(())
 }
 
 /// Writes `<node id>@<ip:port>` to `<run>/worker.addr`, mode 0600, through a temporary file
@@ -56,6 +77,22 @@ pub(crate) fn listen_port(run: &Path) -> anyhow::Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_runtime_dir_others_may_open_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("latticed-rundir-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        let run = crate::private_dir(&dir).unwrap();
+        assert!(check_private(&run, uid()).is_ok());
+        assert!(
+            check_private(&run, uid().wrapping_add(1)).is_err(),
+            "another owner"
+        );
+        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(check_private(&run, uid()).is_err(), "mode 0755");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn worker_addr_is_private_and_gives_back_its_port() {
