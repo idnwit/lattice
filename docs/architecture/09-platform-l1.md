@@ -71,7 +71,7 @@ TBD: a deck that disconnects leaves its instance running (persistent by design).
 | macOS, deck, mobile layout | `LATTICE_DECK_LAYOUT=mobile cargo run -p lattice-deck` | 390×844 window |
 | macOS, UI gallery (canvas screens) | `cargo run -p lattice-deck-ui --example gallery` | Add `LATTICE_DECK_LAYOUT=mobile` for the phone size |
 | macOS, workspace PoC | `LATTICE_GALLERY=poc cargo run -p lattice-deck-ui --example gallery` | `+` menu, `⌘D` / `⌘⇧D` splits with the app picker, `⌘W` with a confirmation |
-| iOS simulator | `cd crates/lattice-deck && nsh run --target ios --device "iPhone 16 Pro"` | Needs the `nsh` CLI 0.7.0 (`brew install longbridge/tap/nsh`), Xcode, an iOS runtime |
+| iOS simulator | `cd crates/lattice-deck && nsh run --target ios --device "iPhone 16 Pro"` | Needs the `nsh` CLI 0.7.0 to match `nsh-core =0.7.0` (the v0.7.0 release `install.sh`; brew installs latest), Xcode, an iOS runtime |
 
 Interactive flows run on the real platforms with `nsh test nsh.json --target macos|ios`, steps on stdin (`await app.press("role:tab[db-shell]")`, `await app.screenshot("x.png")`).
 The iOS test host builds QuickJS (nsh tooling, not the product). It needs `BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios_sim="--sysroot=$(xcrun --sdk iphonesimulator --show-sdk-path)"`.
