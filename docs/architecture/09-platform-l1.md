@@ -55,7 +55,7 @@ Deck ⇄ QUIC ⇄ `latticed` (terminal runner) ⇄ `latticed-proc` ⇄ shell, on
 | Step | Command |
 |---|---|
 | 1. Process daemon | `cargo run -p latticed-proc` |
-| 2. Worker | `cargo run -p latticed` (listens on `127.0.0.1:7441`, writes `$TMPDIR/lattice/worker.addr`) |
+| 2. Worker | `cargo run -p latticed` (listens on `127.0.0.1:7441`, writes `worker.addr` in the runtime dir, specs/01-pairing.md › Files) |
 | 3a. CLI check | `cargo run -p lattice -- probe "ls /"` (add `--exit` to end the instance, `--iid N` to attach) |
 | 3b. Deck | `LATTICE_DECK_LIVE=1 cargo run -p lattice-deck`; pick Terminal or Echo, `⌘D` to split, `⌘W` to close |
 

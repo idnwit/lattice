@@ -96,7 +96,12 @@ Data dir: macOS `~/Library/Application Support/lattice`; Linux `$XDG_DATA_HOME/l
 Lines starting with `#` and blank lines are ignored. The name is the rest of the line.
 Writers write a temporary file in the same dir, sync it to disk, then rename it over the old file.
 Writers of `worker/decks` hold a lock on `worker/decks.lock` from read to rename. Writers of `deck/workers` hold `deck/invite.lock`.
-Runtime files stay in `$TMPDIR/lattice` (`proc.sock`, `worker.addr`).
+Runtime dir, one per user: `$XDG_RUNTIME_DIR/lattice` when `XDG_RUNTIME_DIR` is set, else `$TMPDIR/lattice-<uid>`, else `/tmp/lattice-<uid>`.
+
+- It holds `proc.sock` and `worker.addr`. `LATTICE_PROC_SOCK` overrides the socket path only.
+- Both daemons and the CLI resolve it the same way. Start them with the same `XDG_RUNTIME_DIR` and `TMPDIR`.
+- The first process creates it with mode 0700. `latticed` refuses a dir that is a symlink, has another owner, or that others may open.
+- `<uid>` keeps users apart where `$TMPDIR` is shared, as `/tmp` is on Linux.
 
 ### Addresses (M1, direct only)
 

@@ -1966,6 +1966,7 @@ dependencies = [
  "lattice-quic",
  "lattice-wasm",
  "lattice-worker",
+ "rustix",
  "tokio",
  "tracing",
  "tracing-subscriber",

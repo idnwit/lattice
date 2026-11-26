@@ -9,7 +9,7 @@
 //!
 //! M1 (direct only): QUIC on `0.0.0.0:7441`; only decks in the allowlist `worker/decks`
 //! may connect (specs/01-pairing.md, rules 12–14). The worker writes `<node id>@<addr>` to
-//! `$TMPDIR/lattice/worker.addr`, so `latticed add-deck` finds the listen port.
+//! `worker.addr` in the per-user runtime dir, so `latticed add-deck` finds the listen port.
 //!
 //! `latticed add-deck [<invite>]` (what `lattice add-deck` runs): the worker side of pairing.
 //! It dials the deck with the worker key and adds the deck to the allowlist. Without the
@@ -83,7 +83,9 @@ async fn main() -> anyhow::Result<()> {
             add_deck(&files, &invite, name).await
         }
         None => {
-            let proc_sock = args.proc_sock.unwrap_or_else(ProcClient::default_path);
+            let proc_sock = args
+                .proc_sock
+                .unwrap_or_else(|| ProcClient::default_path(runtime::uid()));
             serve(&files, &runtime_dir()?, args.listen, &proc_sock).await
         }
     }

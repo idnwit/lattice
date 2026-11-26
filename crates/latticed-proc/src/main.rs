@@ -6,7 +6,8 @@
 //! socket with the `lattice-proc-ipc` v1 protocol.
 //! See this directory's `AGENTS.md` for the frozen-daemon rules.
 //!
-//! Socket path: [`lattice_proc_ipc::default_socket_path`] (`LATTICE_PROC_SOCK` overrides).
+//! Socket path: [`lattice_proc_ipc::default_socket_path`]: `proc.sock` in the per-user
+//! runtime dir (`LATTICE_PROC_SOCK` overrides).
 
 mod fanout;
 mod journal;
@@ -17,7 +18,7 @@ mod server;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let path = lattice_proc_ipc::default_socket_path();
+    let path = lattice_proc_ipc::default_socket_path(rustix::process::getuid().as_raw());
     #[cfg(target_os = "linux")]
     if let Err(e) = rustix::process::set_child_subreaper(Some(rustix::process::getpid())) {
         eprintln!("latticed-proc: PR_SET_CHILD_SUBREAPER: {e}");

@@ -32,7 +32,8 @@
 //!
 //! - [`WorkerHost`]: accept loop; one task per deck connection.
 //! - [`PeerSession`]: sans-IO handler of one deck's sync messages.
-//! - [`ProcClient`]: async IPC client for `latticed-proc`.
+//! - [`ProcClient`]: async IPC client for `latticed-proc`; [`ProcClient::runtime_dir`]: where
+//!   its socket and `worker.addr` live.
 //! - [`AppsRunner`]: packages, instances, journals, effects, delta queues; [`BootEpoch`]
 //!   (a boot's first version); [`Installed`],
 //!   [`PackageLoader`]: how a package a deck sends becomes runnable.
