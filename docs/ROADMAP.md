@@ -46,7 +46,7 @@ Pairing follows the invite flow in [specs/01-pairing.md](specs/01-pairing.md) (D
 1. The deck's `+` on the worker rail opens `Add worker`: the command, `Copy`, and the pairing status.
 2. The invite carries the deck NodeId, the deck `ip:port`, a 32-byte one-time secret, and an expiry 5 minutes ahead.
 3. The worker pins the deck NodeId when it dials. The deck takes the worker NodeId from the TLS handshake.
-4. A valid secret: the deck saves the worker and replies `PairOk`; the worker adds the deck to its allowlist.
+4. A valid secret: the deck replies `PairOk`; the worker adds the deck to its allowlist and confirms with `PairDone`; only then the deck saves the worker.
 5. `latticed` serves only allowlisted decks, on `0.0.0.0:7441`. The allowlist persists in the data dir.
 
 Differences from the full flow in M2.6:
