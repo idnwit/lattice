@@ -5,9 +5,10 @@
 
 mod keys;
 mod paint;
+mod stop;
 mod tty;
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -23,6 +24,7 @@ use tokio::sync::mpsc;
 
 use keys::{Gone, Keys, Origin, Presence};
 use paint::Painter;
+use stop::Stops;
 use tty::Tty;
 
 /// Session name of a created instance (rule 4). TBD: session id type (InstanceRecord).
@@ -38,6 +40,8 @@ const DETACH_FLUSH: Duration = Duration::from_secs(2);
 enum End {
     /// Detach key or stdin closed (rules 8, 9).
     Detached,
+    /// `SIGTERM`, `SIGHUP`, or `SIGQUIT` (rule 9). The terminal may be gone.
+    Stopped,
     /// The instance left `worker/apps` (rule 10).
     Exited,
     /// `--iid` names no instance (rule 2).
@@ -55,12 +59,15 @@ pub(crate) async fn attach(worker: Option<&str>, iid: Option<u64>) -> anyhow::Re
     };
     link.subscribe("worker/apps".parse()?).await?;
     link.subscribe(format!("inst/{iid}/state").parse()?).await?;
+    let stops = Stops::watch()?;
     let end = {
         let _raw = tty.raw()?;
-        Attached::new(link, iid, origin, tty).run().await
+        Attached::new(link, iid, origin, tty).run(stops).await
     };
     match end? {
         End::Detached => println!("detached · instance {iid}"),
+        // Best effort: after SIGHUP the terminal is gone and the write fails.
+        End::Stopped => drop(writeln!(std::io::stdout(), "detached · instance {iid}")),
         End::Exited => println!("instance {iid} exited"),
         End::Missing => anyhow::bail!("no instance {iid}"),
     }
@@ -109,7 +116,7 @@ impl Attached {
         }
     }
 
-    async fn run(mut self) -> anyhow::Result<End> {
+    async fn run(mut self, mut stops: Stops) -> anyhow::Result<End> {
         let mut stdin = spawn_stdin();
         let mut winch = signal(SignalKind::window_change()).context("watch SIGWINCH")?;
         let worker = self.link.worker();
@@ -119,6 +126,7 @@ impl Attached {
                 msg = self.link.next_message() => self.on_update(StateUpdate::from_message(msg?, &worker)).await?,
                 read = stdin.recv() => self.on_stdin(read).await?,
                 _ = winch.recv() => self.on_winch().await?,
+                () = stops.recv() => Some(End::Stopped),
             };
             if let Some(end) = end {
                 return Ok(end);

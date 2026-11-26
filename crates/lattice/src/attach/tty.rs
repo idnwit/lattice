@@ -1,6 +1,8 @@
 //! The local terminal: TTY check, size, raw mode (specs/03-sessions.md, Attach rules 3, 5, 6, 12).
 
 use std::io::Write;
+use std::panic::PanicHookInfo;
+use std::sync::Arc;
 
 use anyhow::Context;
 use rustix::termios::{OptionalActions, Termios, isatty, tcgetattr, tcgetwinsize, tcsetattr};
@@ -43,23 +45,52 @@ impl Tty {
             .context("enter screen")?;
         // A panic message prints before unwinding drops the guard: restore first so it shows.
         let on_panic = saved.clone();
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            restore(&on_panic);
-            prev(info);
-        }));
-        Ok(RawMode { saved })
+        let hook = PanicHook::install(move || restore(&on_panic));
+        Ok(RawMode { saved, _hook: hook })
     }
 }
 
-/// Raw mode on; dropping it restores the TTY (rule 12).
+/// Raw mode on; dropping it restores the TTY and the previous panic hook (rule 12).
 pub(super) struct RawMode {
     saved: Termios,
+    _hook: PanicHook,
 }
 
 impl Drop for RawMode {
     fn drop(&mut self) {
         restore(&self.saved);
+    }
+}
+
+/// The panic hook in place before [`PanicHook::install`].
+type PrevHook = Box<dyn Fn(&PanicHookInfo<'_>) + Send + Sync + 'static>;
+
+/// Runs `on_panic` before the previous panic hook until dropped. Drop puts the previous hook back.
+struct PanicHook {
+    prev: Arc<PrevHook>,
+}
+
+impl PanicHook {
+    fn install(on_panic: impl Fn() + Send + Sync + 'static) -> Self {
+        let prev = Arc::new(std::panic::take_hook());
+        let chained = Arc::clone(&prev);
+        std::panic::set_hook(Box::new(move |info| {
+            on_panic();
+            chained(info);
+        }));
+        Self { prev }
+    }
+}
+
+impl Drop for PanicHook {
+    fn drop(&mut self) {
+        // The hook cannot change while panicking. Ours already ran, and the process is unwinding.
+        if std::thread::panicking() {
+            return;
+        }
+        drop(std::panic::take_hook());
+        let prev = Arc::clone(&self.prev);
+        std::panic::set_hook(Box::new(move |info| prev(info)));
     }
 }
 
@@ -95,5 +126,29 @@ mod tests {
         for (name, got, want) in cases {
             assert_eq!(usable(got), want, "case={name}");
         }
+    }
+
+    #[test]
+    fn dropped_panic_hook_stops_restoring() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let base = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&runs);
+        let hook = PanicHook::install(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        drop(std::panic::catch_unwind(|| {
+            std::panic::panic_any("installed")
+        }));
+        let while_installed = runs.load(Ordering::SeqCst);
+        drop(hook);
+        drop(std::panic::catch_unwind(|| {
+            std::panic::panic_any("dropped")
+        }));
+        let after_drop = runs.load(Ordering::SeqCst);
+        std::panic::set_hook(base);
+        assert_eq!((while_installed, after_drop), (1, 1));
     }
 }
