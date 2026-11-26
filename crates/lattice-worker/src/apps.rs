@@ -191,10 +191,11 @@ impl AppsRunner {
                 tracing::warn!("journal id is not an instance id; skipped");
                 continue;
             };
-            let mut inst = self.rebuild(iid, &info);
+            let (mut inst, asked) = self.rebuild(iid, &info);
             for p in info.procs() {
                 inst.listed(p.id(), p.exit().is_some());
             }
+            inst.check_spawns(asked);
             if inst.runner.is_some() {
                 out.effects.push(AppsEffect::Proc(Request::Subscribe {
                     journal: info.journal().clone(),
@@ -214,22 +215,25 @@ impl AppsRunner {
     }
 
     /// Builds one restored instance: `new` and `start` in replay, then replay to `end_off`.
-    fn rebuild(&self, iid: InstanceId, info: &JournalInfo) -> Instance {
+    /// Also returns how many processes its `start` asks to spawn (Restore rule 7).
+    fn rebuild(&self, iid: InstanceId, info: &JournalInfo) -> (Instance, usize) {
         let meta = JournalMeta::decode(info.meta());
         let built = meta.as_ref().and_then(|m| {
             let package = self.package_of(m).ok()?;
             let (runner, step) = (package.runner)(m.params(), Mode::Replay)?;
+            let asked = start_spawns(&package.runner, m.params());
             step.error
                 .is_none()
-                .then(|| (runner, step, package.manifest.spawn.clone()))
+                .then(|| (runner, step, package.manifest.spawn.clone(), asked))
         });
         let meta = meta.unwrap_or_else(|| {
             #[allow(clippy::expect_used, reason = "a constant reverse-DNS id")]
             let app = AppId::try_new(UNKNOWN_APP).expect("valid app id");
             JournalMeta::new(app, None, Vec::new(), String::new())
         });
-        let Some((runner, step, spawn)) = built else {
-            return Instance::new(iid, info.journal().clone(), meta, None, self.epoch);
+        let Some((runner, step, spawn, asked)) = built else {
+            let inst = Instance::new(iid, info.journal().clone(), meta, None, self.epoch);
+            return (inst, 0);
         };
         let mut inst = Instance::new(iid, info.journal().clone(), meta, Some(runner), self.epoch);
         inst.spawn = spawn;
@@ -238,7 +242,7 @@ impl AppsRunner {
         if let Some(delta) = step.delta {
             inst.deltas.push(delta);
         }
-        inst
+        (inst, asked)
     }
 
     /// The `worker/apps` records, in instance order.
@@ -431,6 +435,17 @@ impl AppsRunner {
         }
         effects
     }
+}
+
+/// How many processes `start` asks to spawn with `params`. Replay drops effects, so a
+/// throwaway runner runs `start` live; its effects are counted, never run (Restore rule 7).
+fn start_spawns(runner: &RunnerFactory, params: &[u8]) -> usize {
+    runner(params, Mode::Live).map_or(0, |(_, step)| {
+        step.effects
+            .iter()
+            .filter(|e| matches!(e, lattice_app::Effect::Spawn { .. }))
+            .count()
+    })
 }
 
 /// One journal entry: replay below the restore end, else live; `resumed` once replay

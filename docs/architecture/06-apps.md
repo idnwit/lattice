@@ -225,6 +225,7 @@ TBD: guard against the wall clock stepping back between two boots (persist the l
 4. A `Gap` during replay calls `on_gap` and marks the instance `degraded`.
 5. An app upgrade restores the same way. The new runner replays raw output, so state needs no migration.
 6. A restored instance keeps its `iid`. Its state stream restarts at the new boot epoch (Sync to viewers rule 10), so decks resync from the full state.
+7. A journal that lists fewer processes than `start` asks to spawn restores `failed`, as it was before the restart. A spawn failed, or never reached `latticed-proc`; `latticed-proc` keeps no record of it. Replay drops effects, so the worker counts the spawns of `start` on a throwaway runner, live, and runs none of them.
 
 ## Clean points
 
