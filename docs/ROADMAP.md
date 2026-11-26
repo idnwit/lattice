@@ -26,7 +26,7 @@ Status values: `done` (exit criteria met and tested), `partial` (code landed, a 
 
 | # | Goal | Crates | Done when | Status |
 |---|---|---|---|---|
-| M1.1 | Proc IPC v1 codec: TLV, `Hello`, journals (`Open`, `Trim`, `Drop`), spawn, write, resize, subscribe, gap, exit | `lattice-proc-ipc` | Its 6 contract tests pass. Golden v1 fixtures and a fuzz target exist | partial: golden v1 and proptest fuzz properties pass; no `fuzz/` target yet |
+| M1.1 | Proc IPC v1 codec: TLV, `Hello`, journals (`Open`, `Trim`, `Drop`), spawn, write, resize, subscribe, gap, exit | `lattice-proc-ipc` | Its 6 contract tests pass. Golden v1 fixtures and a fuzz target exist | done: golden v1, proptest properties, `fuzz/` target `proc_ipc_decode` (nightly) |
 | M1.2 | Process daemon: PTYs, per-instance journals with budget and trim, fan-out, poll loop, unix socket | `latticed-proc` | A test client opens a journal, spawns `sh`, writes, and reads back. Journal tests pass across eviction and trim. Proptest covers the journal | done |
 | M1.3 | Sync wire: postcard frames with `u32` length, `Hello`, `Subscribe`, `Change`, `Action` | `lattice-sync-proto` | Its 3 contract tests pass, including split reads | done |
 | M1.4 | Local worker host: proc client, journal subscriptions, sessions, sync session to decks | `lattice-worker` | Its contract tests pass against a real `latticed-proc`, with no network | done |
