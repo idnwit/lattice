@@ -7,7 +7,7 @@ use lattice_app::{InstancePhase, ProcRef};
 use lattice_proc_ipc::{EntryKind, ExitStatus, JournalId, Offset, ProcId};
 
 fn runner() -> AppsRunner {
-    let mut r = AppsRunner::new();
+    let mut r = AppsRunner::new(BootEpoch::from_unix_millis(0));
     r.install(echo_hash(), echo_installed());
     r
 }

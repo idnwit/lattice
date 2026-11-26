@@ -15,7 +15,7 @@ mod apps {
     use lattice_builtin_apps::Builtin;
     use lattice_package::Package;
     use lattice_wasm::{Limits, TRAP, WasmApp, engine};
-    use lattice_worker::{AppsEffect, AppsRunner, Installed, StateSync};
+    use lattice_worker::{AppsEffect, AppsRunner, BootEpoch, Installed, StateSync};
 
     fn builtin(id: &str) -> (&'static Builtin, Package) {
         let b = lattice_builtin_apps::by_id(id).unwrap();
@@ -36,7 +36,7 @@ mod apps {
             .unwrap()
             .with_limits(limits);
         let runner = Arc::new(move |params: &[u8], mode: Mode| app.instantiate(params, mode));
-        let mut apps = AppsRunner::new();
+        let mut apps = AppsRunner::new(BootEpoch::from_unix_millis(0));
         apps.install(b.package(), Installed::new(package.manifest, runner));
         apps
     }

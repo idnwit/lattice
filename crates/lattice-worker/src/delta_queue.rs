@@ -14,15 +14,44 @@ pub(crate) enum Resume<'a> {
     FullState,
 }
 
+/// The first version of every `State` stream in one run of `latticed` (06-apps.md, Sync to
+/// viewers rules 10–12). `latticed` makes it from the clock at boot; the runner never reads one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BootEpoch(u64);
+
+impl BootEpoch {
+    /// Low bits left for commits: a boot may commit 2^20 deltas per stream per millisecond it
+    /// runs before its versions could reach the next boot's epoch.
+    pub const SHIFT: u32 = 20;
+
+    /// The epoch of a boot at `unix_ms`: `unix_ms << 20`, saturating (past the year 2527).
+    pub fn from_unix_millis(unix_ms: u64) -> Self {
+        Self(unix_ms.saturating_mul(1 << Self::SHIFT))
+    }
+
+    /// The first version (before any commit).
+    pub fn base(self) -> u64 {
+        self.0
+    }
+}
+
 /// Ring of the newest committed deltas with their versions.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct DeltaQueue {
     deltas: VecDeque<(u64, Vec<u8>)>,
     version: u64,
 }
 
 impl DeltaQueue {
-    /// The version of the newest delta (0 before any commit).
+    /// An empty queue at version `epoch` (06-apps.md, Sync to viewers rule 10).
+    pub(crate) fn new(epoch: BootEpoch) -> Self {
+        Self {
+            deltas: VecDeque::new(),
+            version: epoch.base(),
+        }
+    }
+
+    /// The version of the newest delta (the epoch before any commit).
     pub(crate) fn version(&self) -> u64 {
         self.version
     }
@@ -70,7 +99,7 @@ mod tests {
 
     #[test]
     fn resume_inside_the_queue_sends_only_missing_deltas() {
-        let mut q = DeltaQueue::default();
+        let mut q = DeltaQueue::new(BootEpoch::from_unix_millis(0));
         q.push(b"a".to_vec());
         q.push(b"b".to_vec());
         q.push(b"c".to_vec());
@@ -83,7 +112,7 @@ mod tests {
 
     #[test]
     fn resume_older_than_the_queue_gets_full_state() {
-        let mut q = DeltaQueue::default();
+        let mut q = DeltaQueue::new(BootEpoch::from_unix_millis(0));
         for _ in 0..=DELTA_QUEUE_LEN {
             q.push(Vec::new());
         }
@@ -94,11 +123,38 @@ mod tests {
 
     #[test]
     fn a_reader_ahead_of_the_writer_gets_full_state() {
-        let mut q = DeltaQueue::default();
+        let mut q = DeltaQueue::new(BootEpoch::from_unix_millis(0));
         assert_eq!(q.resume(Some(0)), Resume::Deltas(Vec::new()));
         assert_eq!(q.resume(Some(1)), Resume::FullState);
         assert_eq!(q.push(b"a".to_vec()), 1);
         assert_eq!(q.version(), 1);
         assert_eq!(q.resume(Some(0)), Resume::Deltas(vec![(1, &b"a"[..])]));
+    }
+
+    #[test]
+    fn a_version_from_an_earlier_boot_gets_the_full_state() {
+        // Boot 1 commits three deltas; a deck holds the newest.
+        let mut before = DeltaQueue::new(BootEpoch::from_unix_millis(1));
+        for d in [b"a", b"b", b"c"] {
+            before.push(d.to_vec());
+        }
+        let held = before.version();
+        // Boot 2 (1 ms later) commits as many again: its versions never meet the old ones.
+        let mut after = DeltaQueue::new(BootEpoch::from_unix_millis(2));
+        for d in [b"x", b"y", b"z"] {
+            after.push(d.to_vec());
+        }
+        assert!(after.version() > held, "{} > {held}", after.version());
+        assert_eq!(after.resume(Some(held)), Resume::FullState);
+    }
+
+    #[test]
+    fn the_epoch_is_the_boot_millis_shifted_and_saturates() {
+        assert_eq!(BootEpoch::from_unix_millis(0).base(), 0);
+        assert_eq!(BootEpoch::from_unix_millis(3).base(), 3 << 20);
+        assert_eq!(BootEpoch::from_unix_millis(u64::MAX).base(), u64::MAX);
+        let q = DeltaQueue::new(BootEpoch::from_unix_millis(7));
+        assert_eq!(q.version(), 7 << 20);
+        assert_eq!(q.resume(Some(7 << 20)), Resume::Deltas(Vec::new()));
     }
 }

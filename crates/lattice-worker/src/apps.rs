@@ -24,7 +24,7 @@ use lattice_app::{
 use lattice_package::Manifest;
 use lattice_proc_ipc::{EntryKind, ErrorCode, JournalInfo, Offset, OpenSpec, Reply, Request};
 
-use crate::delta_queue::Resume;
+use crate::delta_queue::{BootEpoch, Resume};
 use crate::runner::{DynRunner, Input, Mode, Step};
 
 mod instance;
@@ -127,6 +127,8 @@ pub struct AppsRunner {
     /// Instances of the `Spawn` requests still waiting for `Spawned`, oldest first.
     spawn_queue: VecDeque<InstanceId>,
     apps_version: u64,
+    /// First version of every state stream in this boot (06-apps.md, Sync to viewers rule 10).
+    epoch: BootEpoch,
 }
 
 impl std::fmt::Debug for AppsRunner {
@@ -138,21 +140,20 @@ impl std::fmt::Debug for AppsRunner {
     }
 }
 
-impl Default for AppsRunner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AppsRunner {
     /// A runner with no package installed: the worker ships no app (D44).
-    pub fn new() -> Self {
+    ///
+    /// `epoch` is this boot's first version (`latticed` passes [`BootEpoch::from_unix_millis`]
+    /// of its start), so versions after a restart exceed all earlier ones (06-apps.md, Sync to
+    /// viewers rules 10–12).
+    pub fn new(epoch: BootEpoch) -> Self {
         Self {
             packages: BTreeMap::new(),
             instances: BTreeMap::new(),
             next_iid: 1,
             spawn_queue: VecDeque::new(),
-            apps_version: 0,
+            apps_version: epoch.base(),
+            epoch,
         }
     }
 
@@ -228,9 +229,9 @@ impl AppsRunner {
             JournalMeta::new(app, None, Vec::new(), String::new())
         });
         let Some((runner, step, spawn)) = built else {
-            return Instance::new(iid, info.journal().clone(), meta, None);
+            return Instance::new(iid, info.journal().clone(), meta, None, self.epoch);
         };
-        let mut inst = Instance::new(iid, info.journal().clone(), meta, Some(runner));
+        let mut inst = Instance::new(iid, info.journal().clone(), meta, Some(runner), self.epoch);
         inst.spawn = spawn;
         let (start, end) = info.range();
         inst.replay_until = (start < end).then_some(end);
@@ -308,7 +309,7 @@ impl AppsRunner {
             .map_err(|e| e.code().to_owned())?;
         self.next_iid = self.next_iid.saturating_add(1);
         out.effects.push(AppsEffect::Proc(Request::Open(open)));
-        let mut inst = Instance::new(iid, journal.clone(), meta, Some(runner));
+        let mut inst = Instance::new(iid, journal.clone(), meta, Some(runner), self.epoch);
         inst.spawn = spawn;
         inst.commit(step, None, out);
         inst.resume(out);
@@ -473,5 +474,7 @@ fn on_gap(inst: &mut Instance, new_start: Offset, out: &mut Out) {
     inst.replayed_to(new_start, out);
 }
 
+#[cfg(test)]
+mod restore_tests;
 #[cfg(test)]
 mod tests;

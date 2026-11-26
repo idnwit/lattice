@@ -8,7 +8,7 @@ use lattice_app::{
 use lattice_proc_ipc::{JournalId, Offset, ProcId, Request, SpawnSpec};
 
 use super::AppsEffect;
-use crate::delta_queue::DeltaQueue;
+use crate::delta_queue::{BootEpoch, DeltaQueue};
 use crate::runner::{DynRunner, Input, Mode, Step};
 use lattice_package::SpawnTemplate;
 
@@ -68,12 +68,13 @@ pub(super) struct Instance {
 }
 
 impl Instance {
-    /// A new instance with no process yet.
+    /// A new instance with no process yet; its state stream starts at `epoch`.
     pub(super) fn new(
         iid: InstanceId,
         journal: JournalId,
         meta: JournalMeta,
         runner: Option<Box<dyn DynRunner>>,
+        epoch: BootEpoch,
     ) -> Self {
         let phase = if runner.is_some() {
             InstancePhase::Running
@@ -86,7 +87,7 @@ impl Instance {
             meta,
             phase,
             runner,
-            deltas: DeltaQueue::default(),
+            deltas: DeltaQueue::new(epoch),
             spawn: Vec::new(),
             replay_until: None,
             live: BTreeSet::new(),

@@ -69,8 +69,12 @@ impl App for Echo {
         Ok(())
     }
 
-    fn on_output(&mut self, _ctx: &mut Ctx, state: &mut Value<u64>, proc: ProcRef, bytes: &[u8]) {
+    /// Output `clear` is a clean point: Echo trims there.
+    fn on_output(&mut self, ctx: &mut Ctx, state: &mut Value<u64>, proc: ProcRef, bytes: &[u8]) {
         self.proc = Some(proc);
+        if bytes == b"clear" {
+            ctx.trim();
+        }
         let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         state.set(state.get().saturating_add(len));
     }

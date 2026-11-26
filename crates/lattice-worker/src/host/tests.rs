@@ -200,7 +200,7 @@ async fn spawn_host(policy: PeerPolicy) -> (DuplexStream, Shared, Worker) {
     tokio::spawn(fake_daemon(theirs));
     let proc = ProcClient::handshake(ours).await.unwrap();
     // The worker ships no app: Echo arrives as a package on the first create (D44).
-    let apps = AppsRunner::new();
+    let apps = AppsRunner::new(crate::BootEpoch::from_unix_millis(0));
     let (worker_end, deck_end) = tokio::io::duplex(64 * 1024);
     let transport = OneDeck::new(worker_end);
     let conn = transport.1.clone();
