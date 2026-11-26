@@ -19,6 +19,8 @@ Screen-level layouts. Each section names its canvas artboard. Behavior lives in 
 - Center: tabs; each tab holds a split tree of panes. Panes may target different workers.
 - Right: tools (`Files ⌘⇧E`, `Git ⌘⇧G`, `Ports ⌘⇧P`, `Agents`). Fluid: wraps below the center on narrow widths.
 - Status bar always shows the focused pane's worker, link type, latency, and pending approvals.
+- Failed instance pane (specs/03-sessions.md, Behavior 16–18): header error glyph + `instance.failed` meta, body `<App> failed` centered over `bg/0`. The same note layout as a failed create.
+  TBD: canvas artboard for a failed instance pane. Does it keep the last screen of the instance, or show only the note?
 
 ## Agent views — artboards "Agent session · Visual ⇄ Terminal", "Agent pane in a split"
 

@@ -11,10 +11,13 @@
 //!   shows `closing` until the worker drops the instance.
 //! - A live pane goes away when its instance leaves `worker/apps` (shell exit, close done).
 //!   Only an instance seen in the list once can leave it.
+//! - A live pane whose instance is `failed` stays, marked failed, until the user closes it
+//!   (specs/03-sessions.md, Behavior 16–18).
 //! - A tab whose last pane goes away goes too.
 //!
 //! TBD: move to `lattice-deck-core` with layouts as data (07-layouts.md).
 
+use lattice_app::InstancePhase;
 use lattice_deck_core::PaneId;
 use lattice_deck_ui::workspace::{Axis, SplitNode};
 
@@ -32,8 +35,14 @@ pub(crate) enum Content {
     Picker,
     /// `create` sent; waiting for the instance id.
     Starting(App),
-    /// A live instance. `seen`: it was in a `worker/apps` list.
-    Live { app: App, iid: u64, seen: bool },
+    /// A live instance. `seen`: it was in a `worker/apps` list. `failed`: its phase there
+    /// is `failed`.
+    Live {
+        app: App,
+        iid: u64,
+        seen: bool,
+        failed: bool,
+    },
     /// `close` sent; waiting for the instance to leave `worker/apps`.
     Closing { app: App, iid: u64 },
     /// `create` failed with this code.
@@ -156,6 +165,7 @@ impl Workspace {
             app,
             iid,
             seen: false,
+            failed: false,
         };
         true
     }
@@ -234,15 +244,22 @@ impl Workspace {
         self.confirming = None;
     }
 
-    /// The instances now in `worker/apps`: live panes see theirs; a pane whose instance was
-    /// seen (or is closing) and left the list goes away.
-    pub(crate) fn instances(&mut self, alive: &[u64]) {
+    /// The instances now in `worker/apps`, with their phase: live panes see theirs and its
+    /// phase; a pane whose instance was seen (or is closing) and left the list goes away.
+    /// A `failed` instance stays listed, so its pane stays (Behavior 16).
+    pub(crate) fn instances(&mut self, listed: &[(u64, InstancePhase)]) {
+        let phase_of = |iid: u64| listed.iter().find(|(i, _)| *i == iid).map(|(_, p)| *p);
         let mut gone = Vec::new();
         for tab in &mut self.tabs {
             for_each_leaf(&mut tab.root, &mut |p| match &mut p.content {
-                Content::Live { iid, seen, .. } if alive.contains(iid) => *seen = true,
+                Content::Live {
+                    iid, seen, failed, ..
+                } if phase_of(*iid).is_some() => {
+                    *seen = true;
+                    *failed = phase_of(*iid) == Some(InstancePhase::Failed);
+                }
                 Content::Live { seen: true, .. } => gone.push(p.id),
-                Content::Closing { iid, .. } if !alive.contains(iid) => gone.push(p.id),
+                Content::Closing { iid, .. } if phase_of(*iid).is_none() => gone.push(p.id),
                 _ => {}
             });
         }
@@ -338,6 +355,7 @@ mod tests {
             app: app("Echo"),
             iid: 7,
             seen: false,
+            failed: false,
         };
         assert_eq!(content(&ws, "1.2"), Some(live));
 
@@ -370,7 +388,7 @@ mod tests {
             Some(Content::Closing { iid: 3, .. })
         ));
 
-        ws.instances(&[3]);
+        ws.instances(&[(3, InstancePhase::Running)]);
         assert_eq!(ws.tabs.len(), 1, "still closing");
         ws.instances(&[]);
         assert!(ws.tabs.is_empty(), "the last pane took its tab");
@@ -387,9 +405,34 @@ mod tests {
             1,
             "a list from before the create does not close it"
         );
-        ws.instances(&[5]);
+        ws.instances(&[(5, InstancePhase::Running)]);
         ws.instances(&[]);
         assert!(ws.tabs.is_empty(), "the shell exited");
+    }
+
+    /// Behavior 16–18: a failed instance keeps its pane; only the user closes it.
+    #[test]
+    fn a_failed_instance_keeps_its_pane_until_the_user_closes_it() {
+        let mut ws = Workspace::default();
+        ws.new_tab(app("Terminal"));
+        ws.created(id("1.1"), 4);
+        ws.instances(&[(4, InstancePhase::Running)]);
+        for _ in 0..2 {
+            ws.instances(&[(4, InstancePhase::Failed)]);
+            assert!(
+                matches!(
+                    content(&ws, "1.1"),
+                    Some(Content::Live { failed: true, .. })
+                ),
+                "still shown, as failed"
+            );
+        }
+        assert_eq!(ws.ask_close(), CloseAsk::Confirm, "the user closes it");
+        assert_eq!(ws.confirm_close(), Some(4));
+        ws.instances(&[(4, InstancePhase::Closing)]);
+        assert_eq!(ws.tabs.len(), 1, "still closing");
+        ws.instances(&[]);
+        assert!(ws.tabs.is_empty());
     }
 
     #[test]

@@ -7,8 +7,9 @@
 //! - State updates feed the viewer; each change renders a new view tree into the `trees`
 //!   signal. A `Resync` resubscribes without a version.
 //! - `Event`: the viewer turns a UI event into actions, sent to the instance (fire and forget).
-//! - `Close`: sends `close{iid}`. `worker/apps` lists the live instances; a pane whose
-//!   instance left it goes away ([`Workspace::instances`]).
+//! - `Close`: sends `close{iid}`. `worker/apps` lists the instances and their phase; a pane
+//!   whose instance left it goes away, one whose instance is `failed` stays and shows it
+//!   ([`Workspace::instances`]). Nothing here closes a failed instance.
 //!
 //! Viewers live here, not in the link: they outlast a link that ends. Without a link,
 //! `create` fails with `deck.offline`, input is dropped, and closes wait for the next link.
@@ -18,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use lattice_app::view::{DynViewer, UiEvent};
-use lattice_app::{AppId, AppsAction, InstanceId, InstanceRecord, ReplicaEvent};
+use lattice_app::{AppId, AppsAction, InstanceId, InstancePhase, InstanceRecord, ReplicaEvent};
 use lattice_builtin_apps::Builtin;
 use lattice_deck_core::{PaneId, StateUpdate, WorkerLink};
 use lattice_quic::QuicConn;
@@ -278,13 +279,14 @@ impl Instances {
     ) -> Result<(), String> {
         if stream_id.as_str() == "worker/apps" {
             if let StateUpdate::Full { bytes, .. } = update {
-                let alive: Vec<u64> = InstanceRecord::decode_list(bytes)
+                let listed: Vec<(u64, InstancePhase)> = InstanceRecord::decode_list(bytes)
                     .unwrap_or_default()
                     .iter()
-                    .map(|r| r.iid().raw())
+                    .map(|r| (r.iid().raw(), r.phase()))
                     .collect();
-                self.viewers.retain(|iid, _| alive.contains(iid));
-                self.shared.ws.update(|w| w.instances(&alive));
+                self.viewers
+                    .retain(|iid, _| listed.iter().any(|(i, _)| i == iid));
+                self.shared.ws.update(|w| w.instances(&listed));
             }
             return Ok(());
         }

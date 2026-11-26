@@ -35,6 +35,8 @@ const DESKTOP_SIZE: (f32, f32) = (1440.0, 900.0);
 const MOBILE_SIZE: (f32, f32) = (390.0, 844.0);
 /// Opens the `+` menu (specs/09-keyboard.md: `⌘T`).
 const NEW_TAB_KEY: &str = "mod+t";
+/// Code shown on the pane of a `failed` instance (specs/03-sessions.md, Behavior 17).
+const INSTANCE_FAILED: &str = "instance.failed";
 
 /// Size of the window when it opens on a desktop.
 ///
@@ -245,7 +247,7 @@ fn tab_items(w: &Workspace) -> Vec<TabItem> {
             let leaves = t.root.leaves();
             let status = if leaves
                 .iter()
-                .any(|p| matches!(p.content, Content::Failed { .. }))
+                .any(|p| pane_status(&p.content) == Status::Error)
             {
                 Status::Error
             } else {
@@ -292,7 +294,7 @@ fn focused_page(deck: Deck, w: &Workspace, root: &SplitNode<Pane>, focused: Pane
 
 fn pane_status(c: &Content) -> Status {
     match c {
-        Content::Failed { .. } => Status::Error,
+        Content::Failed { .. } | Content::Live { failed: true, .. } => Status::Error,
         Content::Picker | Content::Starting(_) => Status::Idle,
         Content::Live { .. } | Content::Closing { .. } => Status::Online,
     }
@@ -311,19 +313,7 @@ fn title(c: &Content) -> String {
 /// One pane: frame, header, the close confirmation when asked, and its content.
 fn pane_view(deck: Deck, pane: &Pane, focused: bool, confirming: bool, mobile: bool) -> View {
     let id = pane.id;
-    let mut header = PaneHeader::new(
-        id.to_string(),
-        pane_status(&pane.content),
-        title(&pane.content),
-    );
-    header.focused = focused;
-    header.context = "local".to_owned();
-    header.note = match &pane.content {
-        Content::Starting(_) => Some("starting".to_owned()),
-        Content::Closing { .. } => Some("closing".to_owned()),
-        Content::Failed { code, .. } => Some(code.clone()),
-        _ => None,
-    };
+    let header = header(pane, focused);
     let height = if mobile { row::ROW_TOUCH } else { row::ROW_SM };
     pane_frame(&id.to_string(), focused)
         .on_press(move |_: &PressEvent| deck.ws(|w| w.focus(id)))
@@ -341,15 +331,51 @@ fn pane_view(deck: Deck, pane: &Pane, focused: bool, confirming: bool, mobile: b
         .child(content(deck, pane, focused, mobile))
 }
 
+/// The header of `pane`: state glyph, title, and a note for a transient or failed state.
+fn header(pane: &Pane, focused: bool) -> PaneHeader {
+    let mut header = PaneHeader::new(
+        pane.id.to_string(),
+        pane_status(&pane.content),
+        title(&pane.content),
+    );
+    header.focused = focused;
+    header.context = "local".to_owned();
+    header.note = match &pane.content {
+        Content::Starting(_) => Some("starting".to_owned()),
+        Content::Closing { .. } => Some("closing".to_owned()),
+        Content::Failed { code, .. } => Some(code.clone()),
+        Content::Live { failed: true, .. } => Some(INSTANCE_FAILED.to_owned()),
+        _ => None,
+    };
+    header
+}
+
+/// The body of a pane that shows a message instead of a view tree, if it is one.
+fn notice(c: &Content) -> Option<View> {
+    match c {
+        Content::Starting(app) => Some(note(&format!("Starting {}…", app.name), None)),
+        Content::Failed { app, code } => {
+            Some(note(&format!("{} did not start", app.name), Some(code)))
+        }
+        // Behavior 17: the instance stays until the user closes the pane.
+        Content::Live {
+            app, failed: true, ..
+        } => Some(note(&format!("{} failed", app.name), Some(INSTANCE_FAILED))),
+        _ => None,
+    }
+}
+
 fn content(deck: Deck, pane: &Pane, focused: bool, mobile: bool) -> View {
     let id = pane.id;
+    if let Some(v) = notice(&pane.content) {
+        return v;
+    }
     match &pane.content {
         Content::Picker => {
             let height = if mobile { row::ROW_TOUCH } else { row::ROW_MD };
             app_picker(&apps(), height, move |app| deck.pick(id, &app))
         }
-        Content::Starting(app) => note(&format!("Starting {}…", app.name), None),
-        Content::Failed { app, code } => note(&format!("{} did not start", app.name), Some(code)),
+        Content::Starting(_) | Content::Failed { .. } => view(),
         Content::Live { iid, .. } | Content::Closing { iid, .. } => {
             let (iid, trees) = (*iid, deck.shared.trees);
             let tree = move || trees.with(|m| m.get(&iid).cloned().unwrap_or_default());
@@ -376,6 +402,58 @@ fn note(text: &str, code: Option<&str>) -> View {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nsh_engine::{App as EngineApp, EngineConfig, Root};
+    use nsh_testing::Headless;
+
+    fn terminal() -> App {
+        App {
+            id: "dev.lattice.terminal".to_owned(),
+            name: "Terminal".to_owned(),
+        }
+    }
+
+    /// A workspace with one terminal pane whose instance 4 is `failed` in `worker/apps`.
+    fn failed_ws() -> Workspace {
+        let mut w = Workspace::default();
+        let pane = w.new_tab(terminal()).unwrap();
+        w.created(pane, 4);
+        w.instances(&[(4, lattice_app::InstancePhase::Failed)]);
+        w
+    }
+
+    /// Behavior 17: error glyph and `instance.failed` on the pane and its tab.
+    #[test]
+    fn a_failed_instance_shows_the_error_glyph_and_code() {
+        let w = failed_ws();
+        let pane = w.tab().unwrap().root.leaves()[0].clone();
+        let h = header(&pane, true);
+        assert_eq!(h.status, Status::Error);
+        assert_eq!(h.note.as_deref(), Some(INSTANCE_FAILED));
+        assert_eq!(tab_items(&w)[0].status, Status::Error);
+    }
+
+    /// The failed pane as the deck draws it: header plus body.
+    #[component]
+    fn FailedPane() -> impl IntoElement {
+        app_window().id("main").content(|| {
+            let w = failed_ws();
+            let pane = w.tab().unwrap().root.leaves()[0].clone();
+            pane_frame("1.1", true)
+                .child(pane_header(&header(&pane, true)))
+                .child(notice(&pane.content).unwrap_or_else(view))
+        })
+    }
+
+    /// Behavior 16–17, headless: the pane stays and says that its instance failed.
+    #[test]
+    fn a_failed_instance_pane_renders_its_failed_state() {
+        let mut config = EngineConfig::new(EngineApp::Rust(Root::of::<FailedPane>()));
+        config.viewport = nsh_core::Size::new(px(1440.0), px(900.0));
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        app.wait_for("text:Terminal failed").unwrap();
+        app.wait_for("text:instance.failed").unwrap();
+    }
 
     #[test]
     fn tabs_show_their_pane_count_and_an_error_when_a_pane_failed() {
