@@ -1,22 +1,24 @@
 //! The deck side of pairing (specs/01-pairing.md, Invite flow; D47).
 //!
 //! [`PendingInvite`] is the sans-IO check of one invite. [`accept_pair`] serves the worker's
-//! callback over a transport: it reads `PairRequest`, checks the secret, saves the worker
-//! through the caller, answers, and waits for the worker to finish (rule 9).
+//! callback over a transport: it reads `PairRequest`, checks the secret, answers `PairOk`,
+//! and saves the worker through the caller only on the worker's `PairDone` (rule 9).
 //!
-//! No timers here: the caller bounds the wait (the invite's expiry, `PAIR_TIMEOUT`), so the
-//! crate runs on any executor.
+//! No timers here: the caller passes a `PAIR_TIMEOUT` sleep for each exchange and bounds the
+//! whole wait by the invite's expiry, so the crate runs on any executor.
 
+use std::future::{Future, poll_fn};
 use std::net::SocketAddr;
+use std::pin::pin;
+use std::task::Poll;
 
 use lattice_key::NodeId;
 use lattice_sync_proto::{
-    Decoded, FrameDecoder, INVITE_TTL_SECS, Invite, Message, PairSecret, encode,
+    Decoded, FrameDecoder, INVITE_TTL_SECS, Invite, Message, PairSecret, encode, one_line_name,
 };
-use lattice_transport::{Conn, RecvStream, SendStream, Transport, TransportError};
+use lattice_transport::{CloseReason, Conn, RecvStream, SendStream, Transport, TransportError};
 
 use crate::link::DeckError;
-use crate::workers::one_line;
 
 /// Bytes read from a pairing stream per call.
 const READ_CHUNK: usize = 4 * 1024;
@@ -121,120 +123,184 @@ pub struct PairedWorker {
 
 /// Accepts pairing connections on `transport` until one pairs, or the invite is spent.
 ///
-/// For each connection: read `PairRequest`, [`PendingInvite::check`] it at `now()`, call
-/// `save` before answering `PairOk{deck_name}` (rule 7), then wait for the worker to finish
-/// its stream (rule 9). A bad secret gets `PairDenied` and the next connection is served.
-/// `on_step` hears each connection start ([`PairStep::Serving`]) and each one that did not
-/// pair ([`PairStep::Waiting`]).
+/// For each connection, bounded by one `timeout()` (`PAIR_TIMEOUT`, rule 10): read
+/// `PairRequest`, [`PendingInvite::check`] it at `now()`, answer `PairOk{deck_name}`, and
+/// wait for `PairDone`. Only then `save` the worker and finish the stream (rule 9). Then wait
+/// up to one more `timeout()` for the worker's finish, so ours reached it.
+///
+/// A connection that does not pair is closed as refused, and the next one is served while
+/// the invite is open. `on_step` hears each connection start ([`PairStep::Serving`]) and each
+/// one that did not pair ([`PairStep::Waiting`]).
+///
+/// `timeout` makes a fresh `PAIR_TIMEOUT` sleep on the caller's executor: this crate has no
+/// timers. The caller bounds the whole call by the invite's expiry.
 ///
 /// # Errors
 ///
-/// [`DeckError::Remote`] with `pair.expired` or `pair.used` once the invite cannot pair;
-/// [`DeckError::Transport`] when the transport closes; [`DeckError::Remote`] with the code of
-/// `save` when saving failed (the worker gets `PairDenied{pair.save_failed}`).
-pub async fn accept_pair<T: Transport>(
+/// [`DeckError::Remote`] with a code: `pair.expired` once the invite expired; the failure of
+/// the connection that used the invite up (`pair.timeout`, `pair.unconfirmed`); or the code
+/// of `save`. [`DeckError::Transport`] when the transport closes.
+pub async fn accept_pair<T: Transport, F: Future<Output = ()>>(
     transport: &T,
     pending: &mut PendingInvite,
     deck_name: &str,
     now: impl Fn() -> u64,
     mut save: impl FnMut(&PairedWorker) -> Result<(), String>,
     mut on_step: impl FnMut(PairStep),
+    timeout: impl Fn() -> F,
 ) -> Result<PairedWorker, DeckError> {
     loop {
         let (peer, conn) = transport.accept().await?;
         on_step(PairStep::Serving);
-        match serve(&conn, peer, pending, deck_name, &now, &mut save).await {
-            Ok(Some(worker)) => return Ok(worker),
-            Ok(None) => on_step(PairStep::Waiting),
-            Err(Served::Fatal(e)) => return Err(e),
-            Err(Served::Dropped(code)) => {
-                tracing::debug!(%peer, code, "pairing connection dropped");
-                on_step(PairStep::Waiting);
+        let served = within(serve(&conn, peer, pending, deck_name, &now), timeout())
+            .await
+            .unwrap_or(Err(Served("pair.timeout")));
+        let code = match served {
+            Ok((worker, mut exchange)) => {
+                // Dropping `exchange` unpaired closes the connection as refused.
+                save(&worker).map_err(DeckError::Remote)?;
+                exchange.confirm();
+                // The worker finishes once it read our finish. Paired either way: a lost
+                // finish only costs this wait.
+                if within(exchange.drain(), timeout()).await.is_none() {
+                    tracing::debug!(worker = %worker.id, "no finish from the worker in time");
+                }
+                tracing::info!(worker = %worker.id, name = %worker.name, "worker paired");
+                return Ok(worker);
             }
+            Err(Served(code)) => code,
+        };
+        conn.close(CloseReason::Refused);
+        tracing::debug!(%peer, code, "pairing connection did not pair");
+        if pending.is_used() {
+            return Err(DeckError::Remote(code.to_owned()));
         }
-        if pending.is_used() || pending.invite.expired_at(now()) {
-            let deny = if pending.is_used() {
-                PairDeny::Used
-            } else {
-                PairDeny::Expired
-            };
-            return Err(DeckError::Remote(deny.code().to_owned()));
+        if pending.invite.expired_at(now()) {
+            return Err(DeckError::Remote(PairDeny::Expired.code().to_owned()));
         }
+        on_step(PairStep::Waiting);
     }
 }
 
-/// How one connection ended without pairing.
-enum Served {
-    /// The invite cannot pair any more, or saving failed.
-    Fatal(DeckError),
-    /// That connection broke; serve the next.
-    Dropped(&'static str),
-}
+/// Why one connection did not pair: a stable code.
+struct Served(&'static str);
 
-async fn serve<C: Conn>(
-    conn: &C,
+/// Serves one connection up to `PairDone`. The caller saves the worker and confirms.
+async fn serve<'c, C: Conn>(
+    conn: &'c C,
     peer: NodeId,
     pending: &mut PendingInvite,
     deck_name: &str,
     now: &impl Fn() -> u64,
-    save: &mut impl FnMut(&PairedWorker) -> Result<(), String>,
-) -> Result<Option<PairedWorker>, Served> {
-    let dropped = |e: TransportError| Served::Dropped(e.code());
-    let (mut send, mut recv) = conn.accept_bi().await.map_err(dropped)?;
-    let mut dec = FrameDecoder::new();
-    let Some(Message::PairRequest { secret, name, addr }) = read(&mut dec, &mut recv).await else {
-        return Err(Served::Dropped("pair.unexpected_message"));
+) -> Result<(PairedWorker, Exchange<'c, C>), Served> {
+    let dropped = |e: TransportError| Served(e.code());
+    let (send, recv) = conn.accept_bi().await.map_err(dropped)?;
+    let mut exchange = Exchange {
+        conn,
+        send,
+        recv,
+        dec: FrameDecoder::new(),
+        paired: false,
     };
-    let reply = match pending.check(&secret, now()) {
-        Ok(()) => {
-            let worker = PairedWorker {
-                id: peer,
-                addr,
-                name: one_line(&name),
-            };
-            if let Err(code) = save(&worker) {
-                let denied = Message::PairDenied {
-                    code: "pair.save_failed".to_owned(),
-                };
-                drop(write(&mut send, &denied).await);
-                return Err(Served::Fatal(DeckError::Remote(code)));
-            }
-            let ok = Message::PairOk {
-                name: deck_name.to_owned(),
-            };
-            write(&mut send, &ok).await.map_err(dropped)?;
-            // Rule 9: the worker finishes after writing its allowlist; dial only then.
-            while read(&mut dec, &mut recv).await.is_some() {}
-            tracing::info!(worker = %worker.id, name = %worker.name, "worker paired");
-            return Ok(Some(worker));
-        }
-        Err(deny) => Message::PairDenied {
+    let Some(Message::PairRequest { secret, name, addr }) = exchange.read().await else {
+        return Err(Served("pair.unexpected_message"));
+    };
+    if let Err(deny) = pending.check(&secret, now()) {
+        let denied = Message::PairDenied {
             code: deny.code().to_owned(),
-        },
+        };
+        exchange.write(&denied).await.map_err(dropped)?;
+        exchange.finish();
+        // Rule 8: let the worker read the denial; the drop below closes as refused.
+        exchange.drain().await;
+        return Err(Served(deny.code()));
+    }
+    let worker = PairedWorker {
+        id: peer,
+        addr,
+        name: one_line_name(&name),
     };
-    write(&mut send, &reply).await.map_err(dropped)?;
-    drop(send.finish());
-    Ok(None)
-}
-
-/// Next message, or `None` at the end of the stream or on any error.
-async fn read<R: RecvStream>(dec: &mut FrameDecoder, recv: &mut R) -> Option<Message> {
-    let mut buf = vec![0u8; READ_CHUNK];
-    loop {
-        match dec.next() {
-            Ok(Some(Decoded::Message(msg))) => return Some(msg),
-            Ok(None) => {}
-            Ok(Some(Decoded::Unsupported)) | Err(_) => return None,
-        }
-        let n = recv.read(&mut buf).await.ok()??;
-        dec.push(buf.get(..n)?);
+    let ok = Message::PairOk {
+        name: deck_name.to_owned(),
+    };
+    exchange.write(&ok).await.map_err(dropped)?;
+    match exchange.read().await {
+        Some(Message::PairDone) => Ok((worker, exchange)),
+        _ => Err(Served("pair.unconfirmed")),
     }
 }
 
-async fn write<S: SendStream>(send: &mut S, msg: &Message) -> Result<(), TransportError> {
-    let mut wire = Vec::new();
-    encode(msg, &mut wire).map_err(|e| TransportError::Io(e.code().to_owned()))?;
-    send.write_all(&wire).await
+/// The pairing stream of one connection.
+///
+/// Dropped before [`Exchange::confirm`], it closes the connection as refused (rule 10). Its
+/// `Drop` runs before the streams drop, so a cancelled exchange never ends with the clean
+/// finish a dropped send stream would make.
+struct Exchange<'c, C: Conn> {
+    conn: &'c C,
+    send: C::Send,
+    recv: C::Recv,
+    dec: FrameDecoder,
+    paired: bool,
+}
+
+impl<C: Conn> Exchange<'_, C> {
+    /// Next message, or `None` at the end of the stream or on any error.
+    async fn read(&mut self) -> Option<Message> {
+        let mut buf = vec![0u8; READ_CHUNK];
+        loop {
+            match self.dec.next() {
+                Ok(Some(Decoded::Message(msg))) => return Some(msg),
+                Ok(None) => {}
+                Ok(Some(Decoded::Unsupported)) | Err(_) => return None,
+            }
+            let n = self.recv.read(&mut buf).await.ok()??;
+            self.dec.push(buf.get(..n)?);
+        }
+    }
+
+    async fn write(&mut self, msg: &Message) -> Result<(), TransportError> {
+        let mut wire = Vec::new();
+        encode(msg, &mut wire).map_err(|e| TransportError::Io(e.code().to_owned()))?;
+        self.send.write_all(&wire).await
+    }
+
+    fn finish(&mut self) {
+        // A stream that cannot finish is gone already; the peer sees that instead.
+        drop(self.send.finish());
+    }
+
+    /// The worker is saved: finish cleanly and keep the connection open (rule 9).
+    fn confirm(&mut self) {
+        self.paired = true;
+        self.finish();
+    }
+
+    /// Reads until the peer ends its stream, or the stream breaks.
+    async fn drain(&mut self) {
+        let mut buf = vec![0u8; READ_CHUNK];
+        while let Ok(Some(_)) = self.recv.read(&mut buf).await {}
+    }
+}
+
+impl<C: Conn> Drop for Exchange<'_, C> {
+    fn drop(&mut self) {
+        if !self.paired {
+            self.conn.close(CloseReason::Refused);
+        }
+    }
+}
+
+/// `work`, or `None` once `deadline` fires first. Executor-agnostic.
+async fn within<T>(work: impl Future<Output = T>, deadline: impl Future<Output = ()>) -> Option<T> {
+    let mut work = pin!(work);
+    let mut deadline = pin!(deadline);
+    poll_fn(|cx| {
+        if let Poll::Ready(v) = work.as_mut().poll(cx) {
+            return Poll::Ready(Some(v));
+        }
+        deadline.as_mut().poll(cx).map(|()| None)
+    })
+    .await
 }
 
 #[cfg(test)]

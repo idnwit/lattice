@@ -22,6 +22,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
+# Paused time for the 10 s pairing timeout test.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

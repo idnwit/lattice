@@ -6,6 +6,7 @@
 use std::net::SocketAddr;
 
 use lattice_key::NodeId;
+use lattice_sync_proto::one_line_name;
 
 use crate::pair::PairedWorker;
 
@@ -49,7 +50,7 @@ impl WorkerList {
     pub fn add(&mut self, worker: PairedWorker) {
         self.workers.retain(|w| w.id != worker.id);
         self.workers.push(PairedWorker {
-            name: one_line(&worker.name),
+            name: one_line_name(&worker.name),
             ..worker
         });
     }
@@ -79,15 +80,6 @@ fn parse_line(line: &str) -> Option<PairedWorker> {
     let addr = parts.next()?.parse::<SocketAddr>().ok()?;
     let name = parts.next().unwrap_or_default().trim().to_owned();
     Some(PairedWorker { id, addr, name })
-}
-
-/// A name a peer sent, safe for a one-line record: control characters become spaces.
-pub(crate) fn one_line(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect::<String>()
-        .trim()
-        .to_owned()
 }
 
 /// Two-letter rail monogram: first and last character of the name, upper case

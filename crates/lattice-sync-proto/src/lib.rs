@@ -40,7 +40,10 @@ mod stream;
 
 pub use frame::{Decoded, FrameDecoder, FrameError, MAX_FRAME_LEN, encode};
 pub use message::{ActionId, Change, Message, SubscribeMode};
-pub use pair::{INVITE_PREFIX, INVITE_TTL_SECS, Invite, InviteError, PAIR_SECRET_LEN, PairSecret};
+pub use pair::{
+    INVITE_PREFIX, INVITE_TTL_SECS, Invite, InviteError, NAME_MAX_CHARS, PAIR_SECRET_LEN,
+    PAIR_TIMEOUT, PairSecret, one_line_name,
+};
 pub use stream::{Have, MAX_STREAM_ID_LEN, Seq, StreamId, StreamIdError, StreamInfo, StreamKind};
 
 /// Sync protocol version sent in `Hello`.

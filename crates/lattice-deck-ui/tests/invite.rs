@@ -56,6 +56,7 @@ fn host() -> View {
                     }
                     .to_owned(),
                     renew: expired,
+                    ttl_mins: 5,
                 };
                 add_worker_dialog(&dialog, &actions)
             })

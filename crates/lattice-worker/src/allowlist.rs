@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use lattice_key::NodeId;
+use lattice_sync_proto::one_line_name;
 
 /// First line written to a new file.
 const HEADER: &str =
@@ -52,9 +53,10 @@ impl Allowlist {
         out
     }
 
-    /// Adds `deck`, or renames it when it is already listed.
+    /// Adds `deck`, or renames it when it is already listed. The name is cleaned like any
+    /// peer-sent name (specs/01-pairing.md, Data).
     pub fn add(&mut self, deck: NodeId, name: &str) {
-        self.decks.insert(deck, one_line(name));
+        self.decks.insert(deck, one_line_name(name));
     }
 
     /// True when `deck` is listed.
@@ -66,15 +68,6 @@ impl Allowlist {
     pub fn decks(&self) -> impl Iterator<Item = &NodeId> {
         self.decks.keys()
     }
-}
-
-/// A name a peer sent, safe for a one-line record: control characters become spaces.
-pub(crate) fn one_line(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect::<String>()
-        .trim()
-        .to_owned()
 }
 
 #[cfg(test)]
@@ -116,5 +109,17 @@ mod tests {
         let text = list.to_text();
         assert_eq!(text.lines().count(), 2, "text={text:?}");
         assert_eq!(Allowlist::parse(&text), list);
+    }
+
+    #[test]
+    fn names_from_peers_lose_bidi_overrides_and_are_capped() {
+        let mut list = Allowlist::default();
+        let long = format!("mbp\u{202e}{}", "x".repeat(200));
+        list.add(id(1), &long);
+        let text = list.to_text();
+        let line = text.lines().nth(1).unwrap();
+        let name = line.split_once(' ').unwrap().1;
+        assert!(!name.contains('\u{202e}'), "name={name:?}");
+        assert_eq!(name.chars().count(), lattice_sync_proto::NAME_MAX_CHARS);
     }
 }
