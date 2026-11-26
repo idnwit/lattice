@@ -46,13 +46,20 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("bind {}", args.listen))?;
     tracing::info!(addr = %sock.local_addr()?, relay_id = %key.node_id(), "relay listening");
-    serve(sock, RelayEngine::new(key.node_id(), DEFAULT_TTL)).await
+    let mut tokens = TokenSource::open()?;
+    // Each relay process draws a fresh cookie secret (01-transport, Relay rule 19).
+    let cookie_secret = tokens.secret()?;
+    let engine = RelayEngine::new(key.node_id(), DEFAULT_TTL, cookie_secret);
+    serve(sock, engine, tokens).await
 }
 
 /// Receives datagrams, runs the engine, sends its output. Expires on a timer.
-async fn serve(sock: UdpSocket, mut engine: RelayEngine) -> anyhow::Result<()> {
+async fn serve(
+    sock: UdpSocket,
+    mut engine: RelayEngine,
+    mut tokens: TokenSource,
+) -> anyhow::Result<()> {
     let start = Instant::now();
-    let mut tokens = TokenSource::open()?;
     let mut buf = vec![0u8; MAX_DATAGRAM];
     let mut tick = tokio::time::interval(TICK);
     loop {
@@ -117,6 +124,13 @@ impl TokenSource {
         let mut b = [0u8; 8];
         self.0.read_exact(&mut b).context("read /dev/urandom")?;
         Ok(Token::from_bytes(b))
+    }
+
+    /// 32 random bytes: the cookie secret (01-transport, Relay rule 19).
+    fn secret(&mut self) -> anyhow::Result<[u8; 32]> {
+        let mut b = [0u8; 32];
+        self.0.read_exact(&mut b).context("read /dev/urandom")?;
+        Ok(b)
     }
 }
 

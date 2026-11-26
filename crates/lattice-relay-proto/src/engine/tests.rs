@@ -4,8 +4,16 @@ use super::*;
 use crate::codec::{RelayMsg, decode, encode};
 use lattice_key::{NodeKey, SecretKeyBytes};
 
+mod register;
+
+const SECRET: [u8; 32] = [42; 32];
+
 fn key(seed: u8) -> NodeKey {
     NodeKey::from_secret(SecretKeyBytes::new([seed; 32]))
+}
+
+fn engine(ttl: Duration) -> RelayEngine {
+    RelayEngine::new(key(0).node_id(), ttl, SECRET)
 }
 
 /// Fresh wall clock for `ts = 1`.
@@ -13,20 +21,33 @@ fn at(mono: Duration) -> Now {
     Now::new(mono, 1)
 }
 
-fn register_wire(relay: NodeId, node: &NodeKey, nonce: [u8; 16], ts: u64) -> Vec<u8> {
+fn wire(relay: NodeId, node: &NodeKey, nonce: [u8; 16], ts: u64, cookie: [u8; 16]) -> Vec<u8> {
     let msg = RelayMsg::Register {
         node_id: node.node_id(),
         nonce,
         ts,
-        sig: node.sign(&register_signed(relay, nonce, ts)),
+        sig: node.sign(&register_signed(relay, nonce, ts, cookie)),
+        cookie,
     };
-    let mut wire = Vec::new();
-    encode(&msg, &mut wire);
-    wire
+    let mut out = Vec::new();
+    encode(&msg, &mut out);
+    out
+}
+
+/// A `REGISTER` carrying the cookie the engine issues to `src` at wall clock `unix`.
+fn register_wire(
+    e: &RelayEngine,
+    node: &NodeKey,
+    nonce: [u8; 16],
+    ts: u64,
+    src: SocketAddr,
+    unix: u64,
+) -> Vec<u8> {
+    wire(e.relay_id, node, nonce, ts, e.cookies.issue(src, unix))
 }
 
 fn register(engine: &mut RelayEngine, node: &NodeKey, src: SocketAddr, tok: Token) -> Token {
-    let wire = register_wire(engine.relay_id, node, [3; 16], 1);
+    let wire = register_wire(engine, node, [3; 16], 1, src, 1);
     let EngineOutput::Reply(t) = engine.handle(at(Duration::ZERO), src, &wire, tok) else {
         panic!("expected REG_OK");
     };
@@ -36,9 +57,13 @@ fn register(engine: &mut RelayEngine, node: &NodeKey, src: SocketAddr, tok: Toke
     token
 }
 
+fn is_reg_ok(out: &EngineOutput) -> bool {
+    matches!(out, EngineOutput::Reply(t) if matches!(decode(t.bytes()), Ok(RelayMsg::RegOk { .. })))
+}
+
 #[test]
 fn send_is_forwarded_as_recv_to_the_registered_peer() {
-    let mut engine = RelayEngine::new(key(0).node_id(), Duration::from_secs(60));
+    let mut engine = engine(Duration::from_secs(60));
     let (a, b) = (key(1), key(2));
     let (a_addr, b_addr) = (
         SocketAddr::from(([192, 0, 2, 1], 1)),
@@ -72,7 +97,7 @@ fn send_is_forwarded_as_recv_to_the_registered_peer() {
 #[test]
 fn send_is_dropped_after_the_registration_expires() {
     let ttl = Duration::from_secs(60);
-    let mut engine = RelayEngine::new(key(0).node_id(), ttl);
+    let mut engine = engine(ttl);
     let (a, b) = (key(1), key(2));
     let a_addr = SocketAddr::from(([192, 0, 2, 1], 1));
     let b_addr = SocketAddr::from(([192, 0, 2, 2], 2));
@@ -92,7 +117,7 @@ fn send_is_dropped_after_the_registration_expires() {
 
 #[test]
 fn quic_packets_sent_to_the_relay_are_dropped() {
-    let mut engine = RelayEngine::new(key(0).node_id(), Duration::from_secs(60));
+    let mut engine = engine(Duration::from_secs(60));
     let src = SocketAddr::from(([192, 0, 2, 1], 1));
     assert_eq!(
         engine.handle(
@@ -105,35 +130,75 @@ fn quic_packets_sent_to_the_relay_are_dropped() {
     );
 }
 
+/// Rule 7: a captured REGISTER replayed from its own address, or from another one with or
+/// without the thief's own valid cookie swapped in, changes nothing.
 #[test]
 fn replayed_register_is_dropped() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let a = key(1);
-    let (home, thief) = (
-        SocketAddr::from(([192, 0, 2, 1], 1)),
-        SocketAddr::from(([198, 51, 100, 9], 9)),
+    let (home, thief) = (addr(1, 1), SocketAddr::from(([198, 51, 100, 9], 9)));
+    let captured = register_wire(&engine, &a, [5; 16], 1, home, 1);
+    let first = engine.handle(
+        at(Duration::ZERO),
+        home,
+        &captured,
+        Token::from_bytes([1; 8]),
     );
-    let wire = register_wire(engine.relay_id, &a, [5; 16], 1);
-    let first = engine.handle(at(Duration::ZERO), home, &wire, Token::from_bytes([1; 8]));
-    assert!(matches!(first, EngineOutput::Reply(_)));
-    let replay = engine.handle(
-        at(Duration::from_secs(1)),
-        thief,
-        &wire,
-        Token::from_bytes([2; 8]),
-    );
-    assert_eq!(replay, EngineOutput::Drop);
+    assert!(is_reg_ok(&first));
+    let thief_cookie = engine.cookies.issue(thief, 1);
+    let replays = [
+        ("from home, as captured", home, captured.clone()),
+        ("from the thief, as captured", thief, captured.clone()),
+        (
+            "from the thief, re-cookied",
+            thief,
+            swap_cookie(&captured, thief_cookie),
+        ),
+    ];
+    for (name, src, replay) in replays {
+        let out = engine.handle(
+            at(Duration::from_secs(1)),
+            src,
+            &replay,
+            Token::from_bytes([2; 8]),
+        );
+        assert!(!is_reg_ok(&out), "case={name}");
+    }
     let reg = engine
         .table
         .lookup_node(a.node_id(), Duration::from_secs(1));
     assert_eq!(reg.map(|r| r.addr()), Some(home));
 }
 
+/// `register` with its cookie field replaced and the signature left as captured.
+fn swap_cookie(register: &[u8], cookie: [u8; 16]) -> Vec<u8> {
+    let Ok(RelayMsg::Register {
+        node_id,
+        nonce,
+        ts,
+        sig,
+        ..
+    }) = decode(register)
+    else {
+        panic!("expected REGISTER");
+    };
+    let mut out = Vec::new();
+    let msg = RelayMsg::Register {
+        node_id,
+        nonce,
+        ts,
+        sig,
+        cookie,
+    };
+    encode(&msg, &mut out);
+    out
+}
+
 #[test]
 fn stale_register_is_dropped() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let a = key(1);
-    let src = SocketAddr::from(([192, 0, 2, 1], 1));
+    let src = addr(1, 1);
     let now = Now::new(Duration::ZERO, 1_000);
     let cases: [(u64, u8, bool); 4] = [
         (969, 1, false),
@@ -142,25 +207,26 @@ fn stale_register_is_dropped() {
         (1_031, 4, false),
     ];
     for (ts, n, fresh) in cases {
-        let wire = register_wire(engine.relay_id, &a, [n; 16], ts);
+        let wire = register_wire(&engine, &a, [n; 16], ts, src, 1_000);
         let out = engine.handle(now, src, &wire, Token::from_bytes([n; 8]));
-        assert_eq!(matches!(out, EngineOutput::Reply(_)), fresh, "case=ts {ts}");
+        assert_eq!(is_reg_ok(&out), fresh, "case=ts {ts}");
     }
 }
 
 #[test]
 fn register_with_a_bad_signature_is_dropped() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let src = SocketAddr::from(([192, 0, 2, 1], 1));
     // Signed for another relay.
-    let wire = register_wire(key(7).node_id(), &key(1), [1; 16], 1);
+    let cookie = engine.cookies.issue(src, 1);
+    let wire = wire(key(7).node_id(), &key(1), [1; 16], 1, cookie);
     let out = engine.handle(at(Duration::ZERO), src, &wire, Token::from_bytes([1; 8]));
     assert_eq!(out, EngineOutput::Drop);
 }
 
 #[test]
 fn keepalive_gets_a_pong_and_extends_the_registration() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let a = key(1);
     let src = SocketAddr::from(([192, 0, 2, 1], 1));
     let tok = register(&mut engine, &a, src, Token::from_bytes([1; 8]));
@@ -199,7 +265,7 @@ fn send_wire(token: Token, dst: NodeId) -> Vec<u8> {
 /// Rule 11: a rebinding node learns its new address, but the binding stays put.
 #[test]
 fn keepalive_from_a_new_address_gets_its_pong_but_no_rebind() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let (a, src, other) = (key(1), addr(1, 1), addr(1, 2));
     let tok = register(&mut engine, &a, src, Token::from_bytes([1; 8]));
     let mut wire = Vec::new();
@@ -226,7 +292,7 @@ fn keepalive_from_a_new_address_gets_its_pong_but_no_rebind() {
 
 #[test]
 fn keepalive_with_an_unknown_token_is_dropped() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let mut wire = Vec::new();
     encode(
         &RelayMsg::Keepalive {
@@ -246,7 +312,7 @@ fn keepalive_with_an_unknown_token_is_dropped() {
 /// Invariant 4, through the engine.
 #[test]
 fn send_from_another_address_is_dropped() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let (a, b) = (key(1), key(2));
     let tok_a = register(&mut engine, &a, addr(1, 1), Token::from_bytes([1; 8]));
     register(&mut engine, &b, addr(2, 2), Token::from_bytes([2; 8]));
@@ -263,13 +329,13 @@ fn send_from_another_address_is_dropped() {
 /// Rule 12: the sender is live; only the destination is gone.
 #[test]
 fn send_to_an_expired_destination_is_dropped() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let (a, b) = (key(1), key(2));
     register(&mut engine, &b, addr(2, 2), Token::from_bytes([2; 8]));
     let late = Duration::from_secs(80);
-    let a_wire = register_wire(engine.relay_id, &a, [4; 16], 1);
+    let a_wire = register_wire(&engine, &a, [4; 16], 1, addr(1, 1), 1);
     let out = engine.handle(at(late), addr(1, 1), &a_wire, Token::from_bytes([1; 8]));
-    assert!(matches!(out, EngineOutput::Reply(_)));
+    assert!(is_reg_ok(&out));
     let after_b = DEFAULT_TTL + Duration::from_secs(1);
     engine.on_tick(at(after_b));
     assert!(engine.table.lookup_node(a.node_id(), after_b).is_some());
@@ -285,18 +351,18 @@ fn send_to_an_expired_destination_is_dropped() {
 /// Rule 9.
 #[test]
 fn a_new_register_replaces_the_old_token_and_address() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let (a, b) = (key(1), key(2));
     let old = register(&mut engine, &a, addr(1, 1), Token::from_bytes([1; 8]));
     register(&mut engine, &b, addr(2, 2), Token::from_bytes([2; 8]));
-    let wire = register_wire(engine.relay_id, &a, [8; 16], 1);
+    let wire = register_wire(&engine, &a, [8; 16], 1, addr(1, 5), 1);
     let out = engine.handle(
         at(Duration::ZERO),
         addr(1, 5),
         &wire,
         Token::from_bytes([3; 8]),
     );
-    assert!(matches!(out, EngineOutput::Reply(_)));
+    assert!(is_reg_ok(&out));
     let old_send = engine.handle(
         at(Duration::ZERO),
         addr(1, 1),
@@ -310,10 +376,10 @@ fn a_new_register_replaces_the_old_token_and_address() {
 
 #[test]
 fn a_token_collision_is_dropped_and_the_nonce_stays_usable() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
+    let mut engine = engine(DEFAULT_TTL);
     let tok = Token::from_bytes([1; 8]);
     register(&mut engine, &key(1), addr(1, 1), tok);
-    let wire = register_wire(engine.relay_id, &key(2), [5; 16], 1);
+    let wire = register_wire(&engine, &key(2), [5; 16], 1, addr(2, 2), 1);
     let clash = engine.handle(at(Duration::ZERO), addr(2, 2), &wire, tok);
     assert_eq!(clash, EngineOutput::Drop);
     let retry = engine.handle(
@@ -322,47 +388,5 @@ fn a_token_collision_is_dropped_and_the_nonce_stays_usable() {
         &wire,
         Token::from_bytes([2; 8]),
     );
-    assert!(matches!(retry, EngineOutput::Reply(_)));
-}
-
-/// Rule 8.
-#[test]
-fn a_full_nonce_cache_drops_new_registers_until_entries_expire() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
-    engine.max_seen = 1;
-    register(&mut engine, &key(1), addr(1, 1), Token::from_bytes([1; 8]));
-    let wire = register_wire(engine.relay_id, &key(2), [5; 16], 1);
-    let full = engine.handle(
-        at(Duration::ZERO),
-        addr(2, 2),
-        &wire,
-        Token::from_bytes([2; 8]),
-    );
-    assert_eq!(full, EngineOutput::Drop);
-    // ts = 1 is stale at wall 32: the first nonce is forgotten.
-    engine.on_tick(Now::new(Duration::from_secs(31), 32));
-    let wire = register_wire(engine.relay_id, &key(2), [5; 16], 32);
-    let now = Now::new(Duration::from_secs(31), 32);
-    let out = engine.handle(now, addr(2, 2), &wire, Token::from_bytes([2; 8]));
-    assert!(matches!(out, EngineOutput::Reply(_)));
-}
-
-/// Invariant 5: the nonce lives as long as its ts is fresh on the wall clock, whatever mono does.
-#[test]
-fn a_replay_after_a_wall_clock_step_back_is_dropped() {
-    let mut engine = RelayEngine::new(key(0).node_id(), DEFAULT_TTL);
-    let a = key(1);
-    let wire = register_wire(engine.relay_id, &a, [5; 16], 1_030);
-    let first = engine.handle(
-        Now::new(Duration::ZERO, 1_000),
-        addr(1, 1),
-        &wire,
-        Token::from_bytes([1; 8]),
-    );
-    assert!(matches!(first, EngineOutput::Reply(_)));
-    // 120 s of monotonic time pass, but the wall clock stepped back: ts is still fresh.
-    let later = Now::new(Duration::from_secs(120), 1_050);
-    engine.on_tick(later);
-    let replay = engine.handle(later, addr(9, 9), &wire, Token::from_bytes([2; 8]));
-    assert_eq!(replay, EngineOutput::Drop);
+    assert!(is_reg_ok(&retry));
 }

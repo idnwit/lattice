@@ -1,9 +1,13 @@
 //! Relay server engine: one datagram in, what to send out.
 
+mod admit;
+mod guard;
+
 use crate::codec::{Datagram, ObservedAddr, RelayMsg, Token, classify, decode, encode};
 use crate::table::TokenTable;
+use admit::{Cookies, RateLimit};
+use guard::ReplayGuard;
 use lattice_key::{NodeId, Signature};
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -30,8 +34,8 @@ impl Transmit {
 pub const DEFAULT_TTL: Duration = Duration::from_secs(90);
 /// A `REGISTER` is fresh when its `ts` is within this many seconds of the relay clock (rule 6).
 const REGISTER_WINDOW_SECS: u64 = 30;
-/// Most remembered nonces; new `REGISTER`s are dropped while full (rule 8).
-const MAX_SEEN_NONCES: usize = 65_536;
+/// Most nodes tracked, registrations and replay entries alike (rule 8; proposed).
+const MAX_NODES: usize = 131_072;
 
 /// What the UDP loop does with one input datagram.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,24 +70,37 @@ pub struct RelayEngine {
     relay_id: NodeId,
     ttl: Duration,
     table: TokenTable,
-    /// `(node_id, nonce) → ts`: forgotten once `ts` is stale on the wall clock (rule 7).
-    seen: BTreeMap<(NodeId, [u8; 16]), u64>,
-    /// [`MAX_SEEN_NONCES`]; a field so tests can fill it with a few entries.
-    max_seen: usize,
+    guard: ReplayGuard,
+    cookies: Cookies,
+    rate: RateLimit,
+    /// [`MAX_NODES`]; a field so tests can fill it with a few entries.
+    max_nodes: usize,
+}
+
+/// The fields of one `REGISTER`.
+struct Register {
+    node_id: NodeId,
+    nonce: [u8; 16],
+    ts: u64,
+    sig: Signature,
+    cookie: [u8; 16],
 }
 
 impl RelayEngine {
     /// A relay with key `relay_id` granting registrations for `ttl` ([`DEFAULT_TTL`] in production).
+    /// `cookie_secret` comes from the driver's RNG, fresh per process (rule 19).
     ///
     /// `ttl` is cut to whole seconds, at most `u16::MAX`: the relay enforces what `REG_OK` says.
-    pub fn new(relay_id: NodeId, ttl: Duration) -> Self {
+    pub fn new(relay_id: NodeId, ttl: Duration, cookie_secret: [u8; 32]) -> Self {
         let secs = ttl.as_secs().min(u64::from(u16::MAX));
         Self {
             relay_id,
             ttl: Duration::from_secs(secs),
             table: TokenTable::new(),
-            seen: BTreeMap::new(),
-            max_seen: MAX_SEEN_NONCES,
+            guard: ReplayGuard::default(),
+            cookies: Cookies::new(cookie_secret),
+            rate: RateLimit::default(),
+            max_nodes: MAX_NODES,
         }
     }
 
@@ -110,7 +127,17 @@ impl RelayEngine {
                 nonce,
                 ts,
                 sig,
-            } => self.on_register(now, src, (node_id, nonce, ts, sig), fresh_token),
+                cookie,
+            } => {
+                let reg = Register {
+                    node_id,
+                    nonce,
+                    ts,
+                    sig,
+                    cookie,
+                };
+                self.on_register(now, src, &reg, fresh_token)
+            }
             RelayMsg::Keepalive { token } => self.on_keepalive(now.mono, src, token),
             RelayMsg::Send { token, dst, packet } => {
                 self.on_send(now.mono, src, token, dst, packet)
@@ -119,43 +146,52 @@ impl RelayEngine {
             RelayMsg::PunchReq { .. }
             | RelayMsg::RegOk { .. }
             | RelayMsg::Pong { .. }
+            | RelayMsg::Cookie { .. }
             | RelayMsg::Recv { .. }
             | RelayMsg::PunchGo { .. } => EngineOutput::Drop,
         }
     }
 
-    /// Drops expired registrations and nonces. Call on a timer.
+    /// Drops expired registrations, replay entries and idle rate buckets. Call on a timer.
     pub fn on_tick(&mut self, now: Now) {
         self.table.expire(now.mono);
-        self.seen.retain(|_, ts| is_fresh(now.unix_secs, *ts));
+        self.guard.expire(|ts| is_fresh(now.unix_secs, ts));
+        self.rate.expire(now.mono);
     }
 
+    /// Rules 6–9, 17–21: cheap checks first, the signature last.
     fn on_register(
         &mut self,
         now: Now,
         src: SocketAddr,
-        (node_id, nonce, ts, sig): (NodeId, [u8; 16], u64, Signature),
+        reg: &Register,
         token: Token,
     ) -> EngineOutput {
-        if !is_fresh(now.unix_secs, ts) {
+        if !is_fresh(now.unix_secs, reg.ts) {
             return EngineOutput::Drop;
         }
-        // Nonce cache before the signature: a repeat costs no curve work (rule 17).
-        let key = (node_id, nonce);
-        if self.seen.contains_key(&key) || self.seen.len() >= self.max_seen {
-            return EngineOutput::Drop;
+        if !self.cookies.valid(src, now.unix_secs, reg.cookie) {
+            // Rule 18: no state for an unproven address, only a cookie back to it.
+            let cookie = self.cookies.issue(src, now.unix_secs);
+            let nonce = reg.nonce;
+            return reply(src, &RelayMsg::Cookie { cookie, nonce });
         }
-        if node_id
-            .verify(&register_signed(self.relay_id, nonce, ts), &sig)
-            .is_err()
+        if !self.rate.allow(src.ip(), now.mono)
+            || !self.guard.admits(reg.node_id, reg.ts, reg.nonce)
+            || !self.has_room_for(reg.node_id)
         {
+            return EngineOutput::Drop;
+        }
+        let signed = register_signed(self.relay_id, reg.nonce, reg.ts, reg.cookie);
+        if reg.node_id.verify(&signed, &reg.sig).is_err() {
             return EngineOutput::Drop;
         }
         if self.table.contains(token) {
             // A 64-bit collision: the client retries with a new REGISTER (rule 13).
             return EngineOutput::Drop;
         }
-        self.seen.insert(key, ts);
+        let (node_id, nonce) = (reg.node_id, reg.nonce);
+        self.guard.record(node_id, reg.ts, nonce);
         self.table.register(node_id, src, token, now.mono, self.ttl);
         let ttl = u16::try_from(self.ttl.as_secs()).unwrap_or(u16::MAX);
         let observed = ObservedAddr::new(src);
@@ -168,6 +204,12 @@ impl RelayEngine {
                 nonce,
             },
         )
+    }
+
+    /// Rule 8: a known node always has room; a new one only below the cap.
+    fn has_room_for(&self, node: NodeId) -> bool {
+        let known = self.guard.knows(node) || self.table.knows(node);
+        known || (self.guard.len() < self.max_nodes && self.table.nodes() < self.max_nodes)
     }
 
     /// Rule 11. From another address: a `PONG` so the client sees its rebinding, no refresh.
@@ -219,15 +261,22 @@ fn is_fresh(unix_secs: u64, ts: u64) -> bool {
     unix_secs.abs_diff(ts) <= REGISTER_WINDOW_SECS
 }
 
-/// Length of what a `REGISTER` signs: relay_id 32 + nonce 16 + ts 8.
-const REGISTER_SIGNED_LEN: usize = 56;
+/// Length of what a `REGISTER` signs: relay_id 32 + nonce 16 + ts 8 + cookie 16.
+const REGISTER_SIGNED_LEN: usize = 72;
 
-/// The bytes a `REGISTER` signs: `relay_id || nonce || ts` (big-endian).
-pub(crate) fn register_signed(relay_id: NodeId, nonce: [u8; 16], ts: u64) -> Vec<u8> {
+/// The bytes a `REGISTER` signs: `relay_id || nonce || ts || cookie` (`ts` big-endian).
+/// The cookie is signed so nobody can swap in their own (rule 17).
+pub(crate) fn register_signed(
+    relay_id: NodeId,
+    nonce: [u8; 16],
+    ts: u64,
+    cookie: [u8; 16],
+) -> Vec<u8> {
     let mut signed = Vec::with_capacity(REGISTER_SIGNED_LEN);
     signed.extend_from_slice(relay_id.as_bytes());
     signed.extend_from_slice(&nonce);
     signed.extend_from_slice(&ts.to_be_bytes());
+    signed.extend_from_slice(&cookie);
     signed
 }
 

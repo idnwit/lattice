@@ -149,6 +149,11 @@ impl MagicSocket {
                 self.wake.notify_one();
                 None
             }
+            ClientEvent::RegisterDue => {
+                // COOKIE (Relay rule 22): the registrar sends the REGISTER with the cookie.
+                self.wake.notify_one();
+                None
+            }
             // Hole punching lands in M2.5.
             ClientEvent::PunchGo { .. } => None,
         }

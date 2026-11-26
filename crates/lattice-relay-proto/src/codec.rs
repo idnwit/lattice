@@ -1,11 +1,15 @@
 //! Byte layout of relay messages (01-transport.md, Relay wire format).
 
 use lattice_key::{NodeId, Signature};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 
 /// Bytes a `SEND` adds before the QUIC packet: type 1 + token 8 + dst 32.
 /// quinn's max UDP payload is capped so packet + header fits (01, Paths rule 7).
 pub const SEND_HEADER_LEN: usize = 41;
+
+/// Zero bytes after a `KEEPALIVE` token, so it is as long as the `PONG` it gets
+/// (01-transport.md, Relay rules 11 and 23): type 1 + token 8 + pad 10 = `PONG` 19.
+const KEEPALIVE_PAD_LEN: usize = 10;
 
 /// What the first byte of a datagram says it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +46,8 @@ pub enum MsgKind {
     Keepalive = 0x03,
     /// `PONG`
     Pong = 0x04,
+    /// `COOKIE`
+    Cookie = 0x05,
     /// `SEND`
     Send = 0x10,
     /// `RECV`
@@ -59,6 +65,7 @@ impl MsgKind {
             0x02 => Self::RegOk,
             0x03 => Self::Keepalive,
             0x04 => Self::Pong,
+            0x05 => Self::Cookie,
             0x10 => Self::Send,
             0x11 => Self::Recv,
             0x20 => Self::PunchReq,
@@ -107,7 +114,7 @@ impl ObservedAddr {
 /// TBD: encoding of hole-punch candidate lists (M2.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayMsg<'a> {
-    /// Node → relay. `sig = ed25519(relay_id || nonce || ts)`.
+    /// Node → relay. `sig = ed25519(relay_id || nonce || ts || cookie)`.
     Register {
         /// Registering node.
         node_id: NodeId,
@@ -117,6 +124,8 @@ pub enum RelayMsg<'a> {
         ts: u64,
         /// Signature by `node_id`.
         sig: Signature,
+        /// Return-routability cookie from a `COOKIE`; all-zero when the node has none (rule 18).
+        cookie: [u8; 16],
     },
     /// Relay → node.
     RegOk {
@@ -129,7 +138,8 @@ pub enum RelayMsg<'a> {
         /// Nonce of the `REGISTER` this answers (rule 15).
         nonce: [u8; 16],
     },
-    /// Node → relay, every 25 s.
+    /// Node → relay, every 25 s. Encoded with [`KEEPALIVE_PAD_LEN`] zero bytes; a shorter
+    /// one does not decode, so it never gets a bigger `PONG` (rule 23).
     Keepalive {
         /// Registration token.
         token: Token,
@@ -138,6 +148,13 @@ pub enum RelayMsg<'a> {
     Pong {
         /// Source address the relay saw.
         observed: ObservedAddr,
+    },
+    /// Relay → node: register again with `cookie` (rules 18–22).
+    Cookie {
+        /// Cookie bound to the node's source address.
+        cookie: [u8; 16],
+        /// Nonce of the `REGISTER` this answers.
+        nonce: [u8; 16],
     },
     /// Node → relay: forward `packet` to `dst`.
     Send {
@@ -205,12 +222,14 @@ pub fn encode(msg: &RelayMsg<'_>, out: &mut Vec<u8>) {
             nonce,
             ts,
             sig,
+            cookie,
         } => {
-            out.push(MsgKind::Register as u8);
-            out.extend_from_slice(node_id.as_bytes());
-            out.extend_from_slice(nonce);
-            out.extend_from_slice(&ts.to_be_bytes());
-            out.extend_from_slice(&sig.to_bytes());
+            let (ts, sig) = (ts.to_be_bytes(), sig.to_bytes());
+            put(
+                MsgKind::Register,
+                &[node_id.as_bytes(), nonce, &ts, &sig, cookie],
+                out,
+            );
         }
         RelayMsg::RegOk {
             token,
@@ -225,13 +244,14 @@ pub fn encode(msg: &RelayMsg<'_>, out: &mut Vec<u8>) {
             out.extend_from_slice(nonce);
         }
         RelayMsg::Keepalive { token } => {
-            out.push(MsgKind::Keepalive as u8);
-            out.extend_from_slice(&token.to_bytes());
+            let pad = [0; KEEPALIVE_PAD_LEN];
+            put(MsgKind::Keepalive, &[&token.to_bytes(), &pad], out);
         }
         RelayMsg::Pong { observed } => {
             out.push(MsgKind::Pong as u8);
             put_addr(*observed, out);
         }
+        RelayMsg::Cookie { cookie, nonce } => put(MsgKind::Cookie, &[cookie, nonce], out),
         RelayMsg::Send { token, dst, packet } => {
             put_token_node(MsgKind::Send, *token, *dst, packet, out);
         }
@@ -258,6 +278,14 @@ pub fn encode(msg: &RelayMsg<'_>, out: &mut Vec<u8>) {
     }
 }
 
+/// `[kind][parts...]`: fixed fields in wire order.
+fn put(kind: MsgKind, parts: &[&[u8]], out: &mut Vec<u8>) {
+    out.push(kind as u8);
+    for part in parts {
+        out.extend_from_slice(part);
+    }
+}
+
 /// `[kind][token 8][node_id 32][tail]`: the shape of `SEND` and `PUNCH_REQ`.
 fn put_token_node(kind: MsgKind, token: Token, node: NodeId, tail: &[u8], out: &mut Vec<u8>) {
     out.push(kind as u8);
@@ -281,6 +309,7 @@ pub fn decode(bytes: &[u8]) -> Result<RelayMsg<'_>, CodecError> {
             nonce: r.array()?,
             ts: u64::from_be_bytes(r.array()?),
             sig: Signature::from_bytes(r.array()?),
+            cookie: r.array()?,
         },
         MsgKind::RegOk => RelayMsg::RegOk {
             token: r.token()?,
@@ -288,9 +317,18 @@ pub fn decode(bytes: &[u8]) -> Result<RelayMsg<'_>, CodecError> {
             ttl: u16::from_be_bytes(r.array()?),
             nonce: r.array()?,
         },
-        MsgKind::Keepalive => RelayMsg::Keepalive { token: r.token()? },
+        MsgKind::Keepalive => {
+            let token = r.token()?;
+            // The pad's length counts, not its value (rule 23).
+            r.array::<KEEPALIVE_PAD_LEN>()?;
+            RelayMsg::Keepalive { token }
+        }
         MsgKind::Pong => RelayMsg::Pong {
             observed: r.addr()?,
+        },
+        MsgKind::Cookie => RelayMsg::Cookie {
+            cookie: r.array()?,
+            nonce: r.array()?,
         },
         MsgKind::Send => RelayMsg::Send {
             token: r.token()?,
@@ -331,33 +369,8 @@ fn put_addr(addr: ObservedAddr, out: &mut Vec<u8>) {
     out.extend_from_slice(&addr.0.port().to_be_bytes());
 }
 
-/// Checked reads over the fields after the type byte.
-struct Reader<'a>(&'a [u8]);
-
-impl Reader<'_> {
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], CodecError> {
-        let (head, rest) = self
-            .0
-            .split_first_chunk::<N>()
-            .ok_or(CodecError::Truncated)?;
-        self.0 = rest;
-        Ok(*head)
-    }
-
-    fn node_id(&mut self) -> Result<NodeId, CodecError> {
-        NodeId::try_from_bytes(self.array()?).map_err(|_| CodecError::BadNodeId)
-    }
-
-    fn token(&mut self) -> Result<Token, CodecError> {
-        self.array().map(Token::from_bytes)
-    }
-
-    fn addr(&mut self) -> Result<ObservedAddr, CodecError> {
-        let ip = Ipv6Addr::from(self.array::<16>()?);
-        let port = u16::from_be_bytes(self.array()?);
-        Ok(ObservedAddr::new(SocketAddr::new(IpAddr::V6(ip), port)))
-    }
-}
+mod reader;
+use reader::Reader;
 
 #[cfg(test)]
 mod tests;

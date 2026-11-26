@@ -37,7 +37,8 @@ fn addr() -> impl Strategy<Value = ObservedAddr> {
 /// Owned form of a message, so the strategy can hold the tail bytes.
 #[derive(Debug, Clone)]
 enum Owned {
-    Register(NodeId, [u8; 16], u64, [u8; 64]),
+    Register(NodeId, [u8; 16], u64, [u8; 64], [u8; 16]),
+    Cookie([u8; 16], [u8; 16]),
     RegOk(Token, ObservedAddr, u16, [u8; 16]),
     Keepalive(Token),
     Pong(ObservedAddr),
@@ -50,11 +51,16 @@ enum Owned {
 impl Owned {
     fn msg(&self) -> RelayMsg<'_> {
         match self {
-            Self::Register(node_id, nonce, ts, sig) => RelayMsg::Register {
+            Self::Register(node_id, nonce, ts, sig, cookie) => RelayMsg::Register {
                 node_id: *node_id,
                 nonce: *nonce,
                 ts: *ts,
                 sig: Signature::from_bytes(*sig),
+                cookie: *cookie,
+            },
+            Self::Cookie(cookie, nonce) => RelayMsg::Cookie {
+                cookie: *cookie,
+                nonce: *nonce,
             },
             Self::RegOk(token, observed, ttl, nonce) => RelayMsg::RegOk {
                 token: *token,
@@ -93,9 +99,11 @@ fn message() -> impl Strategy<Value = Owned> {
             node_id(),
             any::<[u8; 16]>(),
             any::<u64>(),
-            any::<[u8; 64]>()
+            any::<[u8; 64]>(),
+            any::<[u8; 16]>()
         )
-            .prop_map(|(n, nonce, ts, sig)| Owned::Register(n, nonce, ts, sig)),
+            .prop_map(|(n, nonce, ts, sig, c)| Owned::Register(n, nonce, ts, sig, c)),
+        (any::<[u8; 16]>(), any::<[u8; 16]>()).prop_map(|(c, n)| Owned::Cookie(c, n)),
         (token(), addr(), any::<u16>(), any::<[u8; 16]>())
             .prop_map(|(t, a, ttl, n)| Owned::RegOk(t, a, ttl, n)),
         token().prop_map(Owned::Keepalive),

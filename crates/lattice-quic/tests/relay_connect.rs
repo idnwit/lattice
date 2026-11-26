@@ -24,7 +24,7 @@ async fn spawn_relay(bind: &str) -> HomeRelay {
     let relay_key = key(100);
     let sock = UdpSocket::bind(bind).await.unwrap();
     let addr: SocketAddr = sock.local_addr().unwrap();
-    let mut engine = RelayEngine::new(relay_key.node_id(), DEFAULT_TTL);
+    let mut engine = RelayEngine::new(relay_key.node_id(), DEFAULT_TTL, [7; 32]);
     tokio::spawn(async move {
         let start = Instant::now();
         let mut buf = vec![0u8; 2048];
