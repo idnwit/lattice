@@ -1,6 +1,16 @@
 //! `lattice` CLI.
 //!
-//! `lattice probe`: experiment client (M1). Connects to the local worker over
+//! Pairing (specs/01-pairing.md, D47):
+//!
+//! - `lattice invite`: this machine acts as a deck. Prints `lattice add-deck <invite>`,
+//!   waits for the worker to call back, and saves it to `<data dir>/deck/workers`.
+//! - `lattice add-deck <invite>`: on a worker. Runs `latticed add-deck`, which holds the
+//!   worker key and the allowlist.
+//!
+//! The deck commands below use the deck key and the most recently paired worker
+//! (`--worker` picks another, by name or NodeId prefix).
+//!
+//! `lattice probe`: experiment client (M1). Connects to a paired worker over
 //! QUIC, creates a `terminal` instance, resizes it once through the typed client
 //! (printing the `Size` it returns), types a command, and prints the screen
 //! state it receives. Proves deck ⇄ runner ⇄ proc end to end without a GUI.
@@ -12,18 +22,19 @@
 // Binaries may print (.rules/engineering.md, Lints).
 #![allow(clippy::print_stdout)]
 
-use std::io::Read;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use lattice_app::{AppId, Ticket};
 use lattice_app_echo::{EchoApiClient, EchoParams, EchoState, Message};
 use lattice_app_terminal::{
     Input, Resize, Size, TermError, TermParams, TermState, TerminalApiClient,
 };
-use lattice_deck_core::{DeckHost, Replica, StateUpdate, WorkerLink};
-use lattice_key::{NodeId, NodeKey, SecretKeyBytes};
+use lattice_deck_core::{
+    DeckFiles, DeckHost, PairedWorker, PendingInvite, Replica, StateUpdate, WorkerLink,
+};
 use lattice_quic::{QuicConfig, QuicConn, QuicTransport};
 
 /// Columns of the probe terminal.
@@ -31,17 +42,37 @@ const PROBE_COLS: u16 = 100;
 /// Rows of the probe terminal.
 const PROBE_ROWS: u16 = 30;
 
+/// Overrides the data dir (specs/01-pairing.md, Files).
+const DATA_DIR_ENV: &str = "LATTICE_DATA_DIR";
+
 /// Command-line arguments.
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
+    /// Paired worker to use: name or NodeId prefix. Default: the most recently paired.
+    #[arg(long, global = true)]
+    worker: Option<String>,
     #[command(subcommand)]
     cmd: Cmd,
 }
 
 #[derive(Debug, Subcommand)]
 enum Cmd {
-    /// Open a terminal on the local worker, run `command`, print the screen.
+    /// Deck: make an invite, print the command to run on the worker, wait for it to pair.
+    Invite {
+        /// This deck's name, shown on the worker. Default: the host name.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Worker: pair with the deck that made this invite (runs `latticed add-deck`).
+    AddDeck {
+        /// The invite code (`lattice1:…`).
+        invite: String,
+        /// This worker's name, shown on the deck. Default: the host name.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Open a terminal on the worker, run `command`, print the screen.
     Probe {
         /// Command typed into the shell.
         #[arg(default_value = "echo hello from lattice")]
@@ -53,7 +84,7 @@ enum Cmd {
         #[arg(long)]
         iid: Option<u64>,
     },
-    /// Open an echo instance on the local worker, send `text`, print the lines.
+    /// Open an echo instance on the worker, send `text`, print the lines.
     ProbeEcho {
         /// Text of the line to send.
         #[arg(default_value = "hello from lattice")]
@@ -66,26 +97,97 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    match Cli::parse().cmd {
-        Cmd::Probe { command, exit, iid } => probe(&command, exit, iid).await,
-        Cmd::ProbeEcho { text } => probe_echo(&text).await,
+    let cli = Cli::parse();
+    let worker = cli.worker.as_deref();
+    match cli.cmd {
+        Cmd::Invite { name } => invite(name).await,
+        Cmd::AddDeck { invite, name } => add_deck(&invite, name),
+        Cmd::Probe { command, exit, iid } => probe(worker, &command, exit, iid).await,
+        Cmd::ProbeEcho { text } => probe_echo(worker, &text).await,
     }
 }
 
-/// Opens a link to the local worker and prints its path.
-async fn open_link() -> anyhow::Result<WorkerLink<QuicConn>> {
-    let (worker, addr) = worker_card()?;
-    let cfg = QuicConfig::direct(random_key()?, "127.0.0.1:0".parse()?)
-        .map_err(|e| anyhow::anyhow!(e.code()))?;
-    let transport = QuicTransport::bind(cfg).await?;
-    transport.add_peer(worker, addr);
-    let link = DeckHost::new(transport).open_link(worker).await?;
-    println!("link: {}", link.path());
+/// `lattice invite`: the deck side of pairing (specs/01-pairing.md, rules 1–11).
+async fn invite(name: Option<String>) -> anyhow::Result<()> {
+    let files = deck_files()?;
+    let key = files.node_key().context("deck key")?;
+    let deck = key.node_id();
+    let transport = QuicTransport::bind(QuicConfig::direct_lan(key, "0.0.0.0:0".parse()?)).await?;
+    let ip = lattice_quic::advertise_ip(None).context("no network route")?;
+    let addr = std::net::SocketAddr::new(ip, transport.local_addr()?.port());
+    let secret = lattice_deck_core::random_secret()?;
+    let mut pending = PendingInvite::new(deck, addr, secret, unix_now());
+    println!(
+        "Run this on the worker (expires in 5 min, one use):\n\n  {}\n",
+        pending.command()
+    );
+    println!("waiting for worker…");
+    let ttl = Duration::from_secs(lattice_deck_core::INVITE_TTL_SECS);
+    let name = name.unwrap_or_else(host_name);
+    let save = |w: &PairedWorker| {
+        let mut list = files.workers().map_err(|e| e.kind().to_string())?;
+        list.add(w.clone());
+        files.save_workers(&list).map_err(|e| e.kind().to_string())
+    };
+    let paired = tokio::time::timeout(
+        ttl,
+        lattice_deck_core::accept_pair(&transport, &mut pending, &name, unix_now, save),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("expired"))??;
+    println!(
+        "paired · {} at {} ({})",
+        paired.name,
+        paired.addr,
+        short(&paired)
+    );
+    Ok(())
+}
+
+/// `lattice add-deck`: runs `latticed add-deck` (next to this binary, else on `PATH`),
+/// which holds the worker key and the allowlist.
+fn add_deck(code: &str, name: Option<String>) -> anyhow::Result<()> {
+    use std::os::unix::process::CommandExt;
+    let sibling = std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name("latticed"))
+        .filter(|p| p.is_file());
+    let mut cmd = std::process::Command::new(sibling.unwrap_or_else(|| "latticed".into()));
+    cmd.arg("add-deck").arg(code);
+    if let Some(name) = name {
+        cmd.arg("--name").arg(name);
+    }
+    Err(cmd.exec()).context("run latticed add-deck")
+}
+
+/// Opens a link to the chosen paired worker and prints its path.
+async fn open_link(worker: Option<&str>) -> anyhow::Result<WorkerLink<QuicConn>> {
+    let files = deck_files()?;
+    let list = files.workers().context("worker list")?;
+    let chosen = match worker {
+        Some(key) => list
+            .find(key)
+            .with_context(|| format!("no paired worker {key:?}"))?,
+        None => list
+            .latest()
+            .context("no paired worker: run `lattice invite` first")?,
+    };
+    let key = files.node_key().context("deck key")?;
+    let bind = std::net::SocketAddr::new(unspecified(chosen.addr), 0);
+    let transport = QuicTransport::bind(QuicConfig::direct_lan(key, bind)).await?;
+    transport.add_peer(chosen.id, chosen.addr);
+    let link = DeckHost::new(transport).open_link(chosen.id).await?;
+    println!("link: {} · {}", chosen.name, link.path());
     Ok(link)
 }
 
-async fn probe(command: &str, exit: bool, attach: Option<u64>) -> anyhow::Result<()> {
-    let mut link = open_link().await?;
+async fn probe(
+    worker: Option<&str>,
+    command: &str,
+    exit: bool,
+    attach: Option<u64>,
+) -> anyhow::Result<()> {
+    let mut link = open_link(worker).await?;
 
     let home = std::env::var("HOME").unwrap_or_default();
     let params = lattice_state::encode(&TermParams::new(home).with_size(PROBE_COLS, PROBE_ROWS))?;
@@ -127,8 +229,8 @@ async fn probe(command: &str, exit: bool, attach: Option<u64>) -> anyhow::Result
     Ok(())
 }
 
-async fn probe_echo(text: &str) -> anyhow::Result<()> {
-    let mut link = open_link().await?;
+async fn probe_echo(worker: Option<&str>, text: &str) -> anyhow::Result<()> {
+    let mut link = open_link(worker).await?;
     let params = lattice_state::encode(&EchoParams::default())?;
     let app = AppId::try_new(lattice_app_echo::APP_ID)?;
     let package = builtin(&app)?;
@@ -218,27 +320,58 @@ fn print_screen(state: &TermState, version: Option<u64>) {
     );
 }
 
-/// `<node id hex>@<addr>` written by `latticed` in `$TMPDIR/lattice/worker.addr`.
-fn worker_card() -> anyhow::Result<(NodeId, std::net::SocketAddr)> {
-    let path = std::env::temp_dir().join("lattice").join("worker.addr");
-    let card = std::fs::read_to_string(&path).with_context(|| format!("read {path:?}"))?;
-    let Some((id, addr)) = card.trim().split_once('@') else {
-        bail!("bad worker card");
-    };
-    let mut bytes = [0u8; 32];
-    if id.len() != 64 {
-        bail!("bad node id length");
-    }
-    for (i, b) in bytes.iter_mut().enumerate() {
-        let pair = id.get(i * 2..i * 2 + 2).context("bad node id")?;
-        *b = u8::from_str_radix(pair, 16)?;
-    }
-    Ok((NodeId::try_from_bytes(bytes)?, addr.parse()?))
+/// `<data dir>/deck`.
+fn deck_files() -> anyhow::Result<DeckFiles> {
+    DeckFiles::at(data_dir()?.join("deck")).context("deck data dir")
 }
 
-/// A fresh deck key per run (experiment: the worker allows any loopback deck).
-fn random_key() -> anyhow::Result<NodeKey> {
-    let mut bytes = [0u8; 32];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(NodeKey::from_secret(SecretKeyBytes::new(bytes)))
+/// The data dir (specs/01-pairing.md, Files): `$LATTICE_DATA_DIR`, else the OS data dir.
+/// `latticed` and the deck resolve the same dir.
+fn data_dir() -> anyhow::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os(DATA_DIR_ENV) {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("no HOME")?;
+    if cfg!(target_os = "macos") {
+        return Ok(home.join("Library/Application Support/lattice"));
+    }
+    Ok(match std::env::var_os("XDG_DATA_HOME") {
+        Some(xdg) => PathBuf::from(xdg).join("lattice"),
+        None => home.join(".local/share/lattice"),
+    })
+}
+
+/// `0.0.0.0` or `[::]`, the family of `peer`.
+fn unspecified(peer: std::net::SocketAddr) -> std::net::IpAddr {
+    match peer {
+        std::net::SocketAddr::V4(_) => std::net::Ipv4Addr::UNSPECIFIED.into(),
+        std::net::SocketAddr::V6(_) => std::net::Ipv6Addr::UNSPECIFIED.into(),
+    }
+}
+
+/// The first 8 hex digits of a worker's NodeId.
+fn short(w: &PairedWorker) -> String {
+    w.id.to_string().chars().take(8).collect()
+}
+
+/// The host name (`hostname -s`), else `deck`.
+fn host_name() -> String {
+    std::process::Command::new("hostname")
+        .arg("-s")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "deck".to_owned())
+}
+
+/// Seconds since the Unix epoch.
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
 }

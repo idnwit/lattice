@@ -32,18 +32,27 @@
 //! - [`DeckState`]: workers and their links; what views render.
 //! - [`PaneId`]: `<tab>.<pane>` ids (`1.2`).
 //! - [`Status`]: state glyph values and busiest-child priority.
+//! - [`PendingInvite`], [`accept_pair`]: the deck side of pairing (specs/01-pairing.md, D47).
+//! - [`DeckFiles`], [`WorkerList`]: the deck key and the paired workers in `<data dir>/deck`.
 
 #![deny(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 mod calls;
+mod files;
 mod link;
 mod model;
+mod pair;
 mod status;
 mod wire;
+mod workers;
 
 pub use calls::LinkCaller;
+pub use files::{DeckFiles, random_secret};
 pub use lattice_app::{Replica, ReplicaEvent};
+pub use lattice_sync_proto::INVITE_TTL_SECS;
 pub use link::{DeckError, DeckHost, WorkerLink};
 pub use model::{DeckState, PaneId, PaneIdError, WorkerEntry};
+pub use pair::{PairDeny, PairedWorker, PendingInvite, accept_pair};
 pub use status::Status;
 pub use wire::StateUpdate;
+pub use workers::{WorkerList, monogram};

@@ -36,6 +36,7 @@ pub use signature::Signature;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+use std::str::FromStr;
 
 /// Length of a [`NodeId`] on the wire, in bytes.
 pub const NODE_ID_LEN: usize = 32;
@@ -49,6 +50,9 @@ pub enum KeyError {
     /// The signature does not match the message and key.
     #[error("bad signature")]
     BadSignature,
+    /// The text is not 64 hex digits (D48).
+    #[error("node id text is not 64 hex digits")]
+    BadText,
 }
 
 impl KeyError {
@@ -57,6 +61,7 @@ impl KeyError {
         match self {
             Self::InvalidPublicKey => "key.invalid_public_key",
             Self::BadSignature => "key.bad_signature",
+            Self::BadText => "key.bad_text",
         }
     }
 }
@@ -93,9 +98,44 @@ impl NodeId {
     }
 }
 
+/// Text form (D48): 64 lowercase hex digits, for the CLI, files, and logs.
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for b in &self.0 {
+            write!(f, "{b:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Parses the text form (D48). Upper-case digits are accepted.
+impl FromStr for NodeId {
+    type Err = KeyError;
+
+    fn from_str(s: &str) -> Result<Self, KeyError> {
+        let (pairs, rest) = s.as_bytes().as_chunks::<2>();
+        if pairs.len() != NODE_ID_LEN || !rest.is_empty() {
+            return Err(KeyError::BadText);
+        }
+        let mut bytes = [0u8; NODE_ID_LEN];
+        for (b, [hi, lo]) in bytes.iter_mut().zip(pairs) {
+            let (Some(hi), Some(lo)) = (hex_digit(*hi), hex_digit(*lo)) else {
+                return Err(KeyError::BadText);
+            };
+            *b = (hi << 4) | lo;
+        }
+        Self::try_from_bytes(bytes)
+    }
+}
+
+fn hex_digit(c: u8) -> Option<u8> {
+    char::from(c)
+        .to_digit(16)
+        .and_then(|d| u8::try_from(d).ok())
+}
+
 impl fmt::Debug for NodeId {
     // Short hex prefix: enough to tell nodes apart in logs.
-    // TBD: canonical text form of a NodeId (base32? hex?) for the CLI and pairing codes?
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "NodeId(")?;
         for b in self.0.iter().take(4) {
@@ -206,6 +246,39 @@ mod tests {
     fn error_codes_are_stable_and_namespaced() {
         assert_eq!(KeyError::InvalidPublicKey.code(), "key.invalid_public_key");
         assert_eq!(KeyError::BadSignature.code(), "key.bad_signature");
+        assert_eq!(KeyError::BadText.code(), "key.bad_text");
+    }
+
+    #[test]
+    fn node_id_text_is_64_lowercase_hex_and_roundtrips() {
+        let id = key(4).node_id();
+        let text = id.to_string();
+        assert_eq!(text.len(), 64);
+        assert!(
+            text.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        );
+        assert_eq!(text.parse::<NodeId>(), Ok(id));
+        assert_eq!(text.to_uppercase().parse::<NodeId>(), Ok(id));
+    }
+
+    #[test]
+    fn node_id_text_rejects_bad_input() {
+        let good = key(4).node_id().to_string();
+        let cases = [
+            ("empty", String::new()),
+            ("short", good[..62].to_owned()),
+            ("long", format!("{good}00")),
+            ("not hex", format!("zz{}", &good[2..])),
+            ("not ascii", format!("é{}", &good[2..])),
+        ];
+        for (name, text) in cases {
+            assert_eq!(
+                text.parse::<NodeId>(),
+                Err(KeyError::BadText),
+                "case={name}"
+            );
+        }
     }
 
     #[test]

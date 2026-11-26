@@ -29,7 +29,7 @@ Platform design: [../architecture/README.md](../architecture/README.md).
 |---|---|---|
 | `latticed-proc` | Worker | Frozen process daemon. Owns PTYs and children, raw output ring. Never restarts |
 | `latticed` | Worker | Upgradable connectivity daemon and apps runner. Transport, sync, VT emulation, app instances, hooks, files, SSH endpoint |
-| `lattice` CLI | Worker, desktop | `lattice pair`, `lattice session …`, `lo <file>`, app/layout dev tools |
+| `lattice` CLI | Worker, desktop | `lattice add-deck`, `lattice attach`, `lattice session …`, `lo <file>`, app/layout dev tools |
 | Deck | macOS and iOS (v1), web (later) | Rust core (transport, sync, layouts) + NSH UI. 100% Rust |
 | Relay | Public (ours) or self-hosted | UDP forwarder: registration, first path, hole-punch coordination, fallback. Sees ciphertext only |
 | Ciphertext store | Later, optional | Mailbox/backup for device sync while peers are offline |
@@ -72,7 +72,8 @@ Details: [architecture/04-worker.md](../architecture/04-worker.md), [05-deck.md]
 | View | How an agent pane renders: TTY, Visual, Zoom, Mirrored |
 | Port forward | Mapping `worker:remote → deck localhost:local`, owned by a session |
 | Extension | User-facing name for a `files`-kind app that opens file types or links |
-| Pairing code | 6-character one-time code from `lattice pair`, 5-minute TTL |
+| Invite | One-time pairing offer from a deck: deck NodeId, `ip:port`, secret, 5-minute TTL. Shown as `lattice add-deck <invite code>` (D47) |
+| Allowlist | The decks a worker serves (`worker/decks`). M1 stand-in for the device list |
 
 ## Spec index
 

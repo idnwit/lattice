@@ -39,11 +39,15 @@ A user is a **signed device list**. Membership in that list is the only authorit
 
 ## Pairing
 
-1. A trusted device shows a QR or 6-char code. Or the new worker runs `lattice pair` and shows it.
-2. The code encodes: inviter NodeId, relay URL, one-time secret.
-3. The new node dials the inviter by NodeId. Both run a PAKE (TBD: SPAKE2 or CPace) on the secret.
-4. On success the inviter appends `AddNode` and seals the content key to the new node.
-5. Codes are single-use and expire in 5 minutes.
+Flow and files: [specs/01-pairing.md](../specs/01-pairing.md) (D47).
+
+1. A deck makes an invite: its NodeId, `ip:port`, a 32-byte one-time secret, and an expiry 5 minutes ahead.
+2. The user runs `lattice add-deck <invite>` on the new worker. The worker dials the deck and pins the deck NodeId.
+3. In that TLS session the worker sends the secret. The deck reads the worker NodeId from the handshake.
+4. Both sides store the other's key: the worker in its allowlist (M1) or the device list (M2.6), the deck in its worker list.
+5. Invites are single-use and expire in 5 minutes.
+
+TBD (M2.6): with a relay, the invite carries the deck relay URL instead of `ip:port`. Does the device list still need a PAKE when the secret travels only inside a pinned session?
 
 No account server is needed for any of this. TBD: do we also want an optional account (email/OAuth) for discovery and billing? See decisions.md.
 

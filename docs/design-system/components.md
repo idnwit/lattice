@@ -122,9 +122,9 @@ Row variant in lists: `waiting/bg` fill.
 
 TBD: architecture removes the cloud as a sync server. Labels should become `sync · …` (specs/02-connectivity.md). Pending canvas update.
 
-## Pairing code
+## Invite command
 
-Mono 22px 600, tracking 0.12em, `bg/1` + `line/strong`, `r/4`. Format `XXX–XXX` (6 chars). Helper: "From `lattice pair` on the worker. Expires in 5 min."
+Mono 12px, `bg/0` + `line`, `r/4`, padding `sp/3`, wraps anywhere. Text `lattice add-deck lattice1:…` with the accent `❯` before it. `Copy` beside it. Replaces the 6-character pairing code (D47).
 
 ## Progress meter
 

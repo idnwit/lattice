@@ -16,7 +16,7 @@ There is no account server. The only hosted piece is the **relay**: a public UDP
 ## Relay
 
 1. Stateless except the registration table (`token → node_id, addr, expiry`).
-2. Discovery is implicit: a node is reachable at its home relay. The home relay URL travels in the pairing code and the user Doc.
+2. Discovery is implicit: a node is reachable at its home relay. The home relay URL travels in the invite (specs/01-pairing.md) and the user Doc.
 3. Sees only: NodeIds, addresses, packet sizes, timing. Never content.
 4. Rate limits per token on the public relay. Not needed in v1.
 5. Regional placement matters for relay-path latency. TBD: first region.

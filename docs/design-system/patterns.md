@@ -72,9 +72,24 @@ Same model, thumb-first. All rows ≥ 44px. Radius `r/12` on sheets.
 | Terminal | App bar (session, worker, link, `⇄n`) · tabs · pane switcher ("pane 1/3", swipe ⇆) · terminal · global approval card · extra keys · input |
 | Sessions drawer | Sessions grouped by worker · `+ New` · WORKERS (n/m online) · `Add worker` |
 | Tools sheet | Bottom sheet over dimmed terminal: Ports / Git / Files / Agents |
-| Pair worker | Segmented Scan QR / Enter code · viewfinder · install how-to · `waiting for worker…` · `Pair` |
+| Pair worker | TBD (D47): copy `lattice add-deck <invite>` · status. The artboard still shows Scan QR / Enter code |
 | Agent session | Visual or Terminal · sticky approval in both · composer |
 | Files as tabs | Long-press sheet: Open as tab, Open as pane, OPEN WITH, OPEN IN IDE ON DESKTOP |
 | Attach / voice | Attach sheet: Paste image, Photo library, Take photo, File from worker… |
 
 Splits become swipeable pages on mobile. Live ports open in the in-app browser; long-press copies the URL.
+
+## Add worker (desktop, D47)
+
+The `+` at the end of the worker rail opens a dialog over the workspace: `bg/1` + `line/strong`, 480px wide, `r/6`.
+
+| Part | Shape |
+|---|---|
+| Header | `Add worker` · close (`Escape`) |
+| Lead | "Run this on the worker:" |
+| Command | Invite command component · `Copy` (primary) |
+| Status | State glyph + mono meta: `waiting for worker…` (waiting), `pairing…` (idle), `paired · build-01` (online), `expired` (offline), error code (error) |
+| Helper | "Expires in 5 min. One use." |
+| Footer | `New invite` (secondary) once the invite expired or failed |
+
+TBD: canvas artboard and simulator flow for this dialog (design-change.md).

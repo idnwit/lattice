@@ -26,6 +26,7 @@
 //!
 //! - [`Message`]: every wire message in 02-sync.
 //! - [`StreamId`], [`StreamKind`], [`Seq`], [`Have`]: stream addressing and cursors.
+//! - [`Invite`], [`PairSecret`]: the pairing invite and its code (D47).
 //! - [`encode`], [`FrameDecoder`], [`Decoded`]: framing; unknown types decode
 //!   to [`Decoded::Unsupported`] so the connection stays open (02, rule 5).
 
@@ -34,10 +35,12 @@
 
 mod frame;
 mod message;
+mod pair;
 mod stream;
 
 pub use frame::{Decoded, FrameDecoder, FrameError, MAX_FRAME_LEN, encode};
 pub use message::{ActionId, Change, Message, SubscribeMode};
+pub use pair::{INVITE_PREFIX, INVITE_TTL_SECS, Invite, InviteError, PAIR_SECRET_LEN, PairSecret};
 pub use stream::{Have, MAX_STREAM_ID_LEN, Seq, StreamId, StreamIdError, StreamInfo, StreamKind};
 
 /// Sync protocol version sent in `Hello`.

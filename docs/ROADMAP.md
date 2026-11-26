@@ -20,7 +20,7 @@ Work order inside a milestone follows [architecture/09-platform-l1.md](architect
 Goal: a macOS deck creates a `terminal` app instance on a worker over QUIC on plain UDP. Restarting `latticed` never kills the shell and restores the instance.
 The instance model and create API ship here (D27). Runners and viewers, `terminal` included, are WASM packages already (D42, D44).
 
-M1 is a temporary step away from D2 (relay first). The deck dials `ip:port` from the pairing payload. M2 restores D2.
+M1 is a temporary step away from D2 (relay first). The worker dials the deck `ip:port` from the invite, and the deck dials the worker `ip:port` it learned while pairing. M2 restores D2.
 
 Status values: `done` (exit criteria met and tested), `partial` (code landed, a criterion is open), `todo`.
 
@@ -34,47 +34,38 @@ Status values: `done` (exit criteria met and tested), `partial` (code landed, a 
 | M1.4b | Apps runner: `worker/apps`, `create`/`close`, params validation, state stream with a 1024-delta queue, `terminal` app | `lattice-worker`, `lattice-sync-proto` | `create{terminal}` opens a journal and a shell. `close` waits for exit, then drops it. Two instances never read each other's state. A shell `exit` closes the instance | done (WASM runner, D42) |
 | M1.4c | Restore from journals: rebuild runners from `meta`, replay with effects dropped, `clear` trims, `Gap` marks `degraded` | `lattice-worker` | After a `latticed` restart every instance returns with the same `iid` and screen. Replay writes nothing to a PTY | partial: restore and replay unit-tested; no end-to-end restart test |
 | M1.5 | Direct-only transport: quinn on a plain UDP socket, TLS bound to the ed25519 node key, NodeId pinning | `lattice-quic`, `lattice-transport` | Two local processes echo on a bi stream. A wrong NodeId is refused | done |
-| M1.6 | One-shot pairing by QR or connection code | `lattice`, `latticed`, `lattice-worker`, `lattice-deck` | See [M1.6 pairing](#m16-pairing) | todo |
+| M1.6 | One-shot pairing by invite command (D47) | `lattice`, `latticed`, `lattice-worker`, `lattice-deck` | See [M1.6 pairing](#m16-pairing) | todo |
 | M1.7 | Headless deck: worker link, session and pane model, create and close client, state subscriptions, `lattice attach` as a minimal terminal client | `lattice-deck-core`, `lattice` | A `terminal` instance on worker B is created and used from machine A over a LAN | partial: link, create/close, subscriptions done; no `lattice attach`; loopback only |
 | M1.8 | macOS deck: `DeckState` replaces fixtures; terminal widget, input, resize, worker status | `lattice-deck` | Tabs and split panes work. `vim` and `htop` render correctly | partial: tabs, splits, terminal viewer, resize done; `vim` and `htop` unverified; no worker status |
 | M1.9 | Model proof: `latticed` restarts mid-session; the instance restores; the deck reconnects and replays from its offset | all | An end-to-end test shows the process and its instance survive. Output is complete, except ranges reported as a gap | todo |
 
 ### M1.6 pairing
 
-`lattice pair` lets exactly one deck pair. The worker then adds that deck's public key to its allowlist.
+Pairing follows the invite flow in [specs/01-pairing.md](specs/01-pairing.md) (D47): the deck shows `lattice add-deck <invite code>`, the user runs it on the worker, and the worker calls the deck back.
 
-1. `lattice pair` on the worker prints a QR code and a text connection code in the terminal.
-2. Both carry one payload: worker NodeId, `ip:port`, a 32-byte one-time secret, and an expiry.
-3. The deck reads the payload. macOS pastes the code. iOS scans the QR (M2.7).
-4. The deck dials `ip:port` and pins the worker NodeId from the payload. A different worker key aborts the dial.
-5. Inside the authenticated QUIC connection, the deck sends `PairRequest{secret, deck name}`.
-6. The worker takes the deck public key from the TLS handshake, never from the message.
-7. A valid, unexpired, unused secret makes the worker do three things: add the deck NodeId to its allowlist, mark the secret used, and reply `PairOk{worker name}`.
-8. Any other secret gets `PairDenied`, and the worker closes the connection.
-9. A deck that is not in the allowlist cannot open any stream.
-10. The allowlist persists across `latticed` restarts.
+1. The deck's `+` on the worker rail opens `Add worker`: the command, `Copy`, and the pairing status.
+2. The invite carries the deck NodeId, the deck `ip:port`, a 32-byte one-time secret, and an expiry 5 minutes ahead.
+3. The worker pins the deck NodeId when it dials. The deck takes the worker NodeId from the TLS handshake.
+4. A valid secret: the deck saves the worker and replies `PairOk`; the worker adds the deck to its allowlist.
+5. `latticed` serves only allowlisted decks, on `0.0.0.0:7441`. The allowlist persists in the data dir.
 
-Differences from [specs/01-pairing.md](specs/01-pairing.md):
+Differences from the full flow in M2.6:
 
-- M1 uses a full-entropy secret, so it needs no PAKE. The 6-character code and the PAKE arrive in M2.6.
-- M1 keeps a local allowlist on the worker. The signed device list and the content key replace it in M2.6.
-- The code TTL follows the spec: 5 minutes.
+- M1 uses a full-entropy secret inside a pinned TLS session, so it needs no PAKE.
+- M1 keeps local files (allowlist, worker list). The signed device list and the content key replace them in M2.6.
+- No `lattice unpair` in M1: delete the line from the allowlist file.
 
-Tests: `pair_secret_is_single_use`, `expired_pair_secret_is_denied`, `unpaired_deck_cannot_open_a_stream`, `allowlist_survives_latticed_restart`.
+Tests: `pair_secret_is_single_use`, `expired_pair_secret_is_denied`, `bad_pair_secret_is_denied`, `invite_code_roundtrips`, `unpaired_deck_cannot_open_a_stream`, `allowlist_survives_latticed_restart`.
 
 ### Blocking questions
 
-From [architecture/09-platform-l1.md](architecture/09-platform-l1.md), plus pairing:
+From [architecture/09-platform-l1.md](architecture/09-platform-l1.md). Settled for M1: NodeId text form (D48), invite code encoding and `lattice unpair` ([specs/01-pairing.md](specs/01-pairing.md)).
 
 - TBD: IPC v1 type codes, TLV tag table, byte order, max frame length?
 - TBD: width of `ProcId` on the wire (u32 or u64)?
 - TBD: ring capacity per process?
 - TBD: sync frame byte order, max frame length, stream id charset?
-- TBD: canonical text form of a `NodeId`?
 - TBD: proc socket path on macOS?
-- TBD: M1 connection code encoding: base32 or base64url, and a prefix such as `lattice1:`?
-- TBD: does "show the code in the browser" mean a local web page served by `latticed`? M1 assumes terminal output only.
-- TBD: does M1 need `lattice unpair` to remove a deck?
 - TBD: default journal budget per instance?
 
 ### Out of scope for M1
