@@ -1877,6 +1877,7 @@ name = "lattice-relay-proto"
 version = "0.1.0"
 dependencies = [
  "lattice-key",
+ "proptest",
 ]
 
 [[package]]

@@ -38,9 +38,9 @@ mod codec;
 mod engine;
 mod table;
 
-pub use client::{ClientEvent, KEEPALIVE_INTERVAL, RelayClient};
+pub use client::{ClientEvent, KEEPALIVE_INTERVAL, REGISTER_RETRY, RelayClient, SILENCE_LIMIT};
 pub use codec::{
     CodecError, Datagram, MsgKind, ObservedAddr, RelayMsg, SEND_HEADER_LEN, Token, classify,
     decode, encode,
 };
-pub use engine::{EngineOutput, RelayEngine, Transmit};
+pub use engine::{DEFAULT_TTL, EngineOutput, Now, RelayEngine, Transmit};

@@ -26,3 +26,18 @@ jobs:
           mkdir -p corpus/proc_ipc_decode
           cargo +nightly fuzz run proc_ipc_decode corpus/proc_ipc_decode \
             ../crates/lattice-proc-ipc/tests/fixtures -- -max_total_time=300
+
+  relay-decode:
+    name: relay_decode
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: fuzz 5 min
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/relay_decode
+          cargo +nightly fuzz run relay_decode corpus/relay_decode -- -max_total_time=300

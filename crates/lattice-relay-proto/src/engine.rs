@@ -1,8 +1,9 @@
 //! Relay server engine: one datagram in, what to send out.
 
-use crate::codec::Token;
+use crate::codec::{Datagram, ObservedAddr, RelayMsg, Token, classify, decode, encode};
 use crate::table::TokenTable;
-use lattice_key::NodeId;
+use lattice_key::{NodeId, Signature};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -25,6 +26,13 @@ impl Transmit {
     }
 }
 
+/// Default registration lifetime without a keepalive (01, Relay rule 10).
+pub const DEFAULT_TTL: Duration = Duration::from_secs(90);
+/// A `REGISTER` is fresh when its `ts` is within this many seconds of the relay clock (rule 6).
+const REGISTER_WINDOW_SECS: u64 = 30;
+/// Most remembered nonces; new `REGISTER`s are dropped while full (rule 8).
+const MAX_SEEN_NONCES: usize = 65_536;
+
 /// What the UDP loop does with one input datagram.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineOutput {
@@ -38,24 +46,44 @@ pub enum EngineOutput {
     Punch([Transmit; 2]),
 }
 
+/// Relay clocks, injected by the driver (verification.md rule 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Now {
+    mono: Duration,
+    unix_secs: u64,
+}
+
+impl Now {
+    /// `mono`: monotonic time since the relay started. `unix_secs`: wall clock, UNIX seconds.
+    pub fn new(mono: Duration, unix_secs: u64) -> Self {
+        Self { mono, unix_secs }
+    }
+}
+
 /// Sans-IO relay. Owns the token table. Never reads packet contents.
 #[derive(Debug)]
-#[allow(dead_code, reason = "L1 skeleton: read once the engine is implemented")]
 pub struct RelayEngine {
     relay_id: NodeId,
     ttl: Duration,
     table: TokenTable,
+    /// `(node_id, nonce) → ts`: forgotten once `ts` is stale on the wall clock (rule 7).
+    seen: BTreeMap<(NodeId, [u8; 16]), u64>,
+    /// [`MAX_SEEN_NONCES`]; a field so tests can fill it with a few entries.
+    max_seen: usize,
 }
 
 impl RelayEngine {
-    /// A relay with key `relay_id` granting registrations for `ttl`.
+    /// A relay with key `relay_id` granting registrations for `ttl` ([`DEFAULT_TTL`] in production).
     ///
-    /// TBD: default registration ttl (08-infrastructure.md)?
+    /// `ttl` is cut to whole seconds, at most `u16::MAX`: the relay enforces what `REG_OK` says.
     pub fn new(relay_id: NodeId, ttl: Duration) -> Self {
+        let secs = ttl.as_secs().min(u64::from(u16::MAX));
         Self {
             relay_id,
-            ttl,
+            ttl: Duration::from_secs(secs),
             table: TokenTable::new(),
+            seen: BTreeMap::new(),
+            max_seen: MAX_SEEN_NONCES,
         }
     }
 
@@ -63,142 +91,151 @@ impl RelayEngine {
     ///
     /// `fresh_token` is a random token from the driver's RNG; used only when
     /// this datagram creates a registration (keeps the engine deterministic).
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn handle(
         &mut self,
-        now: Duration,
+        now: Now,
         src: SocketAddr,
         bytes: &[u8],
         fresh_token: Token,
     ) -> EngineOutput {
-        // classify; anything but a decodable relay message: Drop
-        // REGISTER: verify sig over relay_id || nonce || ts (TBD: ts freshness window?);
-        //   register in table; Reply(REG_OK { token, observed: src, ttl })
-        // KEEPALIVE: authorize(token, src); refresh; Reply(PONG { observed: src })
-        // SEND: authorize(token, src) else Drop; lookup dst else Drop;
-        //   Forward(RECV { src: sender node, packet }) to dst addr
-        // PUNCH_REQ: authorize; lookup dst; Punch(PUNCH_GO to both, shared nonce)
-        //   TBD: where the punch nonce comes from (driver RNG like fresh_token?)
-        todo!()
+        if classify(bytes) != Datagram::Relay {
+            return EngineOutput::Drop;
+        }
+        let Ok(msg) = decode(bytes) else {
+            return EngineOutput::Drop;
+        };
+        match msg {
+            RelayMsg::Register {
+                node_id,
+                nonce,
+                ts,
+                sig,
+            } => self.on_register(now, src, (node_id, nonce, ts, sig), fresh_token),
+            RelayMsg::Keepalive { token } => self.on_keepalive(now.mono, src, token),
+            RelayMsg::Send { token, dst, packet } => {
+                self.on_send(now.mono, src, token, dst, packet)
+            }
+            // PUNCH_REQ waits for M2.5 (rule 14). The rest only flows relay → node.
+            RelayMsg::PunchReq { .. }
+            | RelayMsg::RegOk { .. }
+            | RelayMsg::Pong { .. }
+            | RelayMsg::Recv { .. }
+            | RelayMsg::PunchGo { .. } => EngineOutput::Drop,
+        }
     }
 
-    /// Drops expired registrations. Call on a timer.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
-    pub fn on_tick(&mut self, now: Duration) {
-        // table.expire(now)
-        todo!()
+    /// Drops expired registrations and nonces. Call on a timer.
+    pub fn on_tick(&mut self, now: Now) {
+        self.table.expire(now.mono);
+        self.seen.retain(|_, ts| is_fresh(now.unix_secs, *ts));
     }
+
+    fn on_register(
+        &mut self,
+        now: Now,
+        src: SocketAddr,
+        (node_id, nonce, ts, sig): (NodeId, [u8; 16], u64, Signature),
+        token: Token,
+    ) -> EngineOutput {
+        if !is_fresh(now.unix_secs, ts) {
+            return EngineOutput::Drop;
+        }
+        // Nonce cache before the signature: a repeat costs no curve work (rule 17).
+        let key = (node_id, nonce);
+        if self.seen.contains_key(&key) || self.seen.len() >= self.max_seen {
+            return EngineOutput::Drop;
+        }
+        if node_id
+            .verify(&register_signed(self.relay_id, nonce, ts), &sig)
+            .is_err()
+        {
+            return EngineOutput::Drop;
+        }
+        if self.table.contains(token) {
+            // A 64-bit collision: the client retries with a new REGISTER (rule 13).
+            return EngineOutput::Drop;
+        }
+        self.seen.insert(key, ts);
+        self.table.register(node_id, src, token, now.mono, self.ttl);
+        let ttl = u16::try_from(self.ttl.as_secs()).unwrap_or(u16::MAX);
+        let observed = ObservedAddr::new(src);
+        reply(
+            src,
+            &RelayMsg::RegOk {
+                token,
+                observed,
+                ttl,
+                nonce,
+            },
+        )
+    }
+
+    /// Rule 11. From another address: a `PONG` so the client sees its rebinding, no refresh.
+    fn on_keepalive(&mut self, now: Duration, src: SocketAddr, token: Token) -> EngineOutput {
+        if self.table.authorize(token, src, now).is_some() {
+            self.table.refresh(token, now, self.ttl);
+        } else if self.table.live(token, now).is_none() {
+            return EngineOutput::Drop;
+        }
+        reply(
+            src,
+            &RelayMsg::Pong {
+                observed: ObservedAddr::new(src),
+            },
+        )
+    }
+
+    fn on_send(
+        &self,
+        now: Duration,
+        src: SocketAddr,
+        token: Token,
+        dst: NodeId,
+        packet: &[u8],
+    ) -> EngineOutput {
+        let Some(sender) = self.table.authorize(token, src, now) else {
+            return EngineOutput::Drop;
+        };
+        let Some(peer) = self.table.lookup_node(dst, now) else {
+            return EngineOutput::Drop;
+        };
+        let mut bytes = Vec::new();
+        encode(
+            &RelayMsg::Recv {
+                src: sender.node_id(),
+                packet,
+            },
+            &mut bytes,
+        );
+        EngineOutput::Forward(Transmit {
+            dst: peer.addr(),
+            bytes,
+        })
+    }
+}
+
+/// Rule 6: `ts` within [`REGISTER_WINDOW_SECS`] of the relay wall clock.
+fn is_fresh(unix_secs: u64, ts: u64) -> bool {
+    unix_secs.abs_diff(ts) <= REGISTER_WINDOW_SECS
+}
+
+/// Length of what a `REGISTER` signs: relay_id 32 + nonce 16 + ts 8.
+const REGISTER_SIGNED_LEN: usize = 56;
+
+/// The bytes a `REGISTER` signs: `relay_id || nonce || ts` (big-endian).
+pub(crate) fn register_signed(relay_id: NodeId, nonce: [u8; 16], ts: u64) -> Vec<u8> {
+    let mut signed = Vec::with_capacity(REGISTER_SIGNED_LEN);
+    signed.extend_from_slice(relay_id.as_bytes());
+    signed.extend_from_slice(&nonce);
+    signed.extend_from_slice(&ts.to_be_bytes());
+    signed
+}
+
+fn reply(dst: SocketAddr, msg: &RelayMsg<'_>) -> EngineOutput {
+    let mut bytes = Vec::new();
+    encode(msg, &mut bytes);
+    EngineOutput::Reply(Transmit { dst, bytes })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codec::{RelayMsg, decode, encode};
-    use lattice_key::{NodeKey, SecretKeyBytes};
-
-    fn key(seed: u8) -> NodeKey {
-        NodeKey::from_secret(SecretKeyBytes::new([seed; 32]))
-    }
-
-    fn register(engine: &mut RelayEngine, node: &NodeKey, src: SocketAddr, tok: Token) -> Token {
-        let (nonce, ts) = ([3; 16], 1u64);
-        let mut signed = engine.relay_id.as_bytes().to_vec();
-        signed.extend_from_slice(&nonce);
-        signed.extend_from_slice(&ts.to_be_bytes());
-        let msg = RelayMsg::Register {
-            node_id: node.node_id(),
-            nonce,
-            ts,
-            sig: node.sign(&signed),
-        };
-        let mut wire = Vec::new();
-        encode(&msg, &mut wire);
-        let EngineOutput::Reply(t) = engine.handle(Duration::ZERO, src, &wire, tok) else {
-            panic!("expected REG_OK");
-        };
-        let Ok(RelayMsg::RegOk { token, .. }) = decode(t.bytes()) else {
-            panic!("expected REG_OK")
-        };
-        token
-    }
-
-    #[test]
-    #[ignore = "contract: lands with RelayEngine::handle"]
-    fn send_is_forwarded_as_recv_to_the_registered_peer() {
-        let mut engine = RelayEngine::new(key(0).node_id(), Duration::from_secs(60));
-        let (a, b) = (key(1), key(2));
-        let (a_addr, b_addr) = (
-            SocketAddr::from(([192, 0, 2, 1], 1)),
-            SocketAddr::from(([192, 0, 2, 2], 2)),
-        );
-        let tok_a = register(&mut engine, &a, a_addr, Token::from_bytes([1; 8]));
-        register(&mut engine, &b, b_addr, Token::from_bytes([2; 8]));
-        let mut wire = Vec::new();
-        encode(
-            &RelayMsg::Send {
-                token: tok_a,
-                dst: b.node_id(),
-                packet: &[0x40, 9],
-            },
-            &mut wire,
-        );
-        let out = engine.handle(Duration::ZERO, a_addr, &wire, Token::from_bytes([9; 8]));
-        let EngineOutput::Forward(t) = out else {
-            panic!("expected Forward, got {out:?}")
-        };
-        assert_eq!(t.dst(), b_addr);
-        assert_eq!(
-            decode(t.bytes()),
-            Ok(RelayMsg::Recv {
-                src: a.node_id(),
-                packet: &[0x40, 9]
-            })
-        );
-    }
-
-    #[test]
-    #[ignore = "contract: lands with RelayEngine::handle"]
-    fn send_is_dropped_after_the_registration_expires() {
-        let ttl = Duration::from_secs(60);
-        let mut engine = RelayEngine::new(key(0).node_id(), ttl);
-        let (a, b) = (key(1), key(2));
-        let a_addr = SocketAddr::from(([192, 0, 2, 1], 1));
-        let b_addr = SocketAddr::from(([192, 0, 2, 2], 2));
-        let tok_a = register(&mut engine, &a, a_addr, Token::from_bytes([1; 8]));
-        register(&mut engine, &b, b_addr, Token::from_bytes([2; 8]));
-        engine.on_tick(ttl);
-        let mut wire = Vec::new();
-        let send = RelayMsg::Send {
-            token: tok_a,
-            dst: b.node_id(),
-            packet: &[0x40],
-        };
-        encode(&send, &mut wire);
-        let out = engine.handle(ttl, a_addr, &wire, Token::from_bytes([9; 8]));
-        assert_eq!(out, EngineOutput::Drop);
-    }
-
-    #[test]
-    #[ignore = "contract: lands with RelayEngine::handle"]
-    fn quic_packets_sent_to_the_relay_are_dropped() {
-        let mut engine = RelayEngine::new(key(0).node_id(), Duration::from_secs(60));
-        let src = SocketAddr::from(([192, 0, 2, 1], 1));
-        assert_eq!(
-            engine.handle(
-                Duration::ZERO,
-                src,
-                &[0xC0, 1, 2],
-                Token::from_bytes([1; 8])
-            ),
-            EngineOutput::Drop
-        );
-    }
-}
+mod tests;
