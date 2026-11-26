@@ -57,8 +57,8 @@ TBD: design canvas and simulator update for the app picker and the mobile region
 5. On attach, the client sends `resize` with the local size. Each `SIGWINCH` sends `resize` with the new size. A TTY that reports a zero side counts as 80 by 24.
 6. While attached, the local TTY is in raw mode, on the alternate screen, with line wrap off.
 7. Every stdin byte goes to the instance as `input`, unchanged, except the detach key.
-8. The detach key is `Ctrl-\` (byte `0x1C`). Bytes typed before it in the same read are sent first. The instance keeps running.
-9. On detach, the client prints `detached · instance <iid>` and exits with code 0. Stdin closing also detaches.
+8. The detach key is `Ctrl-\` (byte `0x1C`). Bytes typed before it in the same read are sent first. The instance keeps running. Detach waits up to 2 s for those bytes to land, then exits either way (proposed).
+9. On detach, the client prints `detached · instance <iid>` and exits with code 0. Stdin closing also detaches. So do `SIGTERM`, `SIGHUP`, and `SIGQUIT` (proposed); after `SIGHUP` the line may not print.
 10. The instance leaving `worker/apps` (shell exit) ends the attach. The client prints `instance <iid> exited` and exits with code 0.
 11. A link loss or any other error prints the error and exits with code 1.
 12. The client restores the TTY on every exit path, panic included: cooked mode, main screen, line wrap on, cursor shown.
