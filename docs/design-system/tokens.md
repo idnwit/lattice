@@ -63,6 +63,7 @@ Git marks: `M` `#E8C15A`, `A` `#46C46E`, `D` `#F26D6D` (deleted path also struck
 
 - **Inter**: chrome, labels, panels. Tabular numerals on.
 - **JetBrains Mono**: terminal, paths, hashes, keys — anything a user might copy.
+- The `mono` stack falls back to **Symbols Nerd Font Mono** for the Private Use Area icons shell prompts draw; one icon takes one cell. Both fonts ship inside the app (`crates/lattice-deck-ui/fonts/`). TBD: design canvas update (design-change.md).
 
 ## Spacing (4px grid)
 

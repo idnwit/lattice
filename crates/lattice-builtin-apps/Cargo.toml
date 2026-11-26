@@ -1,0 +1,22 @@
+[package]
+name = "lattice-builtin-apps"
+description = "Built-in app packages (D44): build.rs builds every apps/*/ crate to wasm, packages it with app.toml, and embeds the packages. The deck serves them to workers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+lattice-app.workspace = true
+
+[build-dependencies]
+lattice-package = { workspace = true, features = ["toml"] }
+toml.workspace = true
+
+[dev-dependencies]
+lattice-package.workspace = true
+
+[lints]
+workspace = true

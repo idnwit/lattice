@@ -1,0 +1,10 @@
+# Manifest of the built-in terminal app (06-apps.md, Manifest; D44).
+id = "dev.lattice.terminal"
+name = "Terminal"
+version = "0.1.0"
+
+# The user's login shell. `$SHELL` expands on the worker (fallback /bin/sh); the runner
+# picks only the cwd and the PTY size.
+[[spawn]]
+name = "shell"
+argv = ["$SHELL", "-l"]

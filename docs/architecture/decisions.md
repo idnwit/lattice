@@ -19,14 +19,39 @@ Research date: 2026-11. Re-check versions before implementation.
 | D10 | Identity = signed device list + shared content key (HPKE-sealed). No MLS in v1 | proposed | Single user, < 10 devices | 03 |
 | D11 | Worker = `latticed-proc` (frozen) + `latticed` (upgradable) | accepted | Upgrade never kills processes | 04 |
 | D12 | VT emulator in `latticed`, not `latticed-proc` | proposed | Emulator fixes must not restart the frozen daemon | 04 |
-| D13 | Apps = WASM (worker part + pure view part emitting our view tree) **from v1**. Built-in features (terminal, coding_agent, files, ports, git, metrics) are WASM apps on the same API | accepted | One extension path; dogfood the API; agents can build apps | 06 |
+| D13 | Apps = WASM (runner + pure viewer emitting our view tree) **from v1**. Built-in features (terminal, coding_agent, files, ports, git, metrics) are WASM apps on the same API. M1 runs a native `terminal` runner behind the same `Runner` trait until M4 | accepted | One extension path; dogfood the API; agents can build apps | 06 |
 | D14 | Our own view-tree → NSH interpreter. Do not use NSH TSX plugins | proposed | NSH plugins are TSX/QuickJS only; conflicts with 100% Rust | 05, 06 |
 | D15 | Layouts are data; generators may emit them | proposed | Safe for agent-authored layouts | 07 |
 | D16 | Agent-built apps: coding agents follow our docs + `lattice` CLI to build and deploy apps | accepted | Owner intent ("shape it by asking") | 06 |
 | D17 | Own status escape sequence (not herdr OSC 7501) | accepted | herdr is reference only | 04 |
 | D18 | Hosted = public UDP relay only; rate limits later. Ciphertext store optional, later | accepted | No account server | 08 |
 | D19 | Sync payload encoding = postcard, `u32` length-prefixed frames | accepted | 100% Rust; compact; serde. Cross-language not needed | 02 |
-| D20 | Layer 1 crate graph per `brickie.toml`: `lattice-key` (base) holds `NodeId`; sync wire messages in `lattice-sync-proto`; NSH lives in `lattice-deck` only | accepted | Same-row crates cannot share `NodeId`; NSH is I/O with one user | 09 |
+| D20 | Layer 1 crate graph per `brickie.toml`: `lattice-key` (base) holds `NodeId`; sync wire messages in `lattice-sync-proto`; NSH lives in `lattice-deck` only (amended by D39) | accepted | Same-row crates cannot share `NodeId`; NSH is I/O with one user | 09 |
+| D22 | App = **runner** (worker) + **viewer** (deck). Replaces "worker part / view part" | accepted | Owner naming; the runner is not optional | 06 |
+| D23 | Decks create **app instances** with `create{app, package, params}` on `worker/apps`; `close` stops, waits for exit, then deletes. Every process belongs to one instance | accepted | One entry point; apps without processes (metrics) | 06 |
+| D24 | No auto-attach by argv or events. An agent typed in a shell stays part of its `terminal` instance | accepted | Agents open from the UI only | 06, specs/05 |
+| D25 | Instances fully isolated: one runner sandbox each, nothing shared between instances. No shared app data | accepted | Fault and data isolation; simplest model | 06 |
+| D26 | Restore only from `latticed-proc`: per-instance journal (meta + process output + exits), replay with effects dropped. Actions are never stored; each app decides what survives | accepted | Runner is a reducer over a pure process; `latticed` stays stateless | 04, 06 |
+| D27 | Instance model and create API ship in M1 with the `terminal` app | accepted | Platform concept; terminal is the first instance | ROADMAP |
+| D28 | `Trim{iid, upto}` lets a runner drop journal history at clean points (terminal: `clear`). No checkpoint | accepted | Keeps history small without app data in `latticed-proc` | 04, 06 |
+| D29 | App = one Rust crate built twice (`runner`, `viewer` features) into a package keyed by blake3. A worker without the package pulls it from the deck on `create` | accepted | Both parts share model and API; no registry needed in v1 | 06 |
+| D30 | Typed state as in `realtime-workspace` RFC-0005 §6: synced types with draft, commit, rollback, apply; no prediction | accepted | Changes cost O(touched); decks get state then deltas only | 06 |
+| D31 | Unit of sync = whole instance state. 1024-delta queue per instance; a reader outside it gets the full state. Scrollback syncs in full until a dedicated type exists | accepted | Simplest model that still sends deltas | 02, 06 |
+| D33 | Effects recorded in `Ctx`, run after commit, dropped on replay. Timers via `wake_at` | accepted | Deterministic replay; shell input goes straight to the process | 06 |
+| D34 | SDK: synced types and derive copied from `rtf-core` and `rtf-macros` into `lattice-state` and `lattice-state-macros` | accepted | Proven code; encoding-agnostic via serde | 06 |
+| D35 | A runner ends its instance with `finish`; `terminal` finishes when its shell exits. `close` sends `SIGHUP` and waits; `kill` sends `SIGKILL` from the tab context menu | accepted | No stuck panes; user stays in control | 06, specs/03 |
+| D32 | Hook events and agent integration deferred until after the M1 terminal PoC | accepted | Simplest PoC first | 04, ROADMAP |
+| D36 | Reducers are typed methods of an app-defined interface trait (`#[lattice_app::interface]`): the app chooses params, result, and error. The macro generates the action enum, the runner adapter, and a typed client with tickets, as `realtime-workspace` `#[rtf::interface]` | accepted | Simple, typed end to end; the platform moves opaque bytes | 06 |
+| D37 | Hooks (`start`, `on_output`, `on_exit`, `on_gap`, `resumed`, `wake`) stay in the fixed `App` trait; only `on_output`, `on_exit`, `on_gap` replay | accepted | System events are the platform's; actions are the app's | 06 |
+| D38 | `Res` of a reducer is a reply to the caller only: not stored, not replayed, never needed to render. App errors cross the wire as `{code, detail}` | accepted | State is the only source of views (as RFC-0005 TA-20) | 02, 06 |
+| D39 | NSH lives in `lattice-deck`, the UI library `lattice-deck-ui` (components + desktop and mobile layouts, examples show the wiring), and the `viewer` feature of app crates through `lattice-deck-ui`. Interim until viewers are WASM with a view tree (M4) | accepted | Owner: viewers belong to their app; one component library | 05, 06 |
+| D40 | M1 PoC deck = workspace only (tabs, splits, `+` menu with Echo and Terminal). A split opens an app picker, never a default app | accepted | Simplest PoC; platform not biased to the terminal | specs/03 |
+| D41 | Mobile layout shows one region at a time (left panel, workspace, right panel) with a self-hiding switcher; desktop toggles panels beside the workspace | accepted | Owner | specs/03, 05 |
+| D42 | Runners and viewers are WASM already in the M1 PoC, including `terminal`. Supersedes the native interim of D13/D27 and the native-viewer part of D39. `lattice-deck-ui` stays the component and layout library the deck's view-tree interpreter draws with | accepted | Owner: one path for every app from the first build | 05, 06 |
+| D43 | WASM ABI v0 = core wasm + postcard: a few exports (`alloc`, `free`, `init`, `dispatch`, `hook`, `wake_at`, `snapshot` for runners; `load`, `apply`, `render`, `handle` for viewers), every value a postcard envelope. Component model + WIT later; the envelopes carry the same data | accepted | Simplest first; no componentize step; runs on wasmtime (and an interpreter on iOS) | 06 |
+| D44 | The worker ships no app. Built-in apps live in `apps/` (one folder per app, outside `crates/`), build to packages (`app.toml`, `runner.wasm`, `viewer.wasm`, blake3), and are embedded in the deck. A worker missing a package fetches it from the creating deck over the link (`BlobRequest` → `Blob`) | accepted | Install later works the same way | 04, 06 |
+| D45 | `[[spawn]]` argv is fixed by the manifest; `$SHELL` (the worker's login shell, fallback `/bin/sh`) is the only expansion. The runner's `Spawn` effect picks only the cwd (empty: home) and the initial PTY size. The worker host resolves templates; it no longer links per-app spawn code | accepted | Replaces native `SpawnFn` registration, which D44 removed with native apps | 04, 06 |
+| D46 | Empty `create` params mean the app's default params (`App::Params: Default`). The deck creates from the `+` menu and the app picker with empty params; it links no app crate and never encodes an app's params | accepted | Deck holds only packages (D44); no params form in v1 (specs/03 rule 11) | 06 |
 | D21 | Toolchain pinned in `rust-toolchain.toml` (1.100.0); MSRV 1.97 | accepted | NSH 0.7 needs rustc ≥ 1.97 | 05 |
 
 ## Rejected options
@@ -50,7 +75,7 @@ Research date: 2026-11. Re-check versions before implementation.
 3. Relay federation: deck and worker on different home relays?
 4. Recovery when every deck is lost: offer a recovery key?
 5. NSH: iOS sideload packaging on a device; Terminal element throughput and token colors. (Plain `cargo` build and the iOS simulator are verified.)
-6. iOS view parts: interpreter (Pulley / wasmi) on device, or run on worker?
+6. iOS viewers: interpreter (Pulley / wasmi) on device, or run on worker?
 7. WIT world v1: exact host widget set and versioning scheme.
 8. App runtime on worker and deck: wasmtime component model (WASI 0.3) confirmed?
 

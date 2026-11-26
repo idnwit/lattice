@@ -1,0 +1,17 @@
+[package]
+name = "lattice-app"
+description = "App contract (06-apps): App trait, Ctx effects, instance ids and records, worker/apps actions. Sans-IO."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lattice-app-macros.workspace = true
+lattice-state.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

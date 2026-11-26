@@ -38,19 +38,19 @@ desc = "Magic socket (relay | direct under one virtual address) + quinn; impleme
 name = "worker"
 members = ["path:crates/lattice-worker/"]
 tags = ["host"]
-desc = "Worker host: proc daemon client, process streams, serves deck connections"
+desc = "Worker host: proc daemon client, journals, apps runner (one runner per instance), state streams, serves deck connections"
 
 [[brick]]
 name = "deck-core"
 members = ["path:crates/lattice-deck-core/"]
 tags = ["host"]
-desc = "Deck host: worker links, sessions and panes model, input actions. No UI"
+desc = "Deck host: worker links, sessions and panes model, instance states (apply deltas), create/close/kill actions. No UI"
 
 [[brick]]
 name = "latticed-proc"
 members = ["path:crates/latticed-proc/"]
 tags = ["proc"]
-desc = "Frozen process daemon: PTYs, children, ring buffer, IPC server. Sync, poll-based"
+desc = "Frozen process daemon: PTYs, children, per-instance journals, IPC server. Sync, poll-based"
 
 [[brick]]
 name = "latticed"
@@ -75,6 +75,72 @@ name = "cli"
 members = ["lattice"]
 tags = ["bin"]
 desc = "lattice CLI (pair, session, lattice-hook). Placeholder in layer 1"
+
+[[brick]]
+name = "state"
+members = ["path:crates/lattice-state/"]
+tags = ["base"]
+desc = "App SDK: synced types (Value, Map, List, Synced trait), draft/commit/rollback/apply, revisions. Copied from realtime-workspace rtf-core. No I/O"
+
+[[brick]]
+name = "state-macros"
+members = ["path:crates/lattice-state-macros/"]
+tags = ["base"]
+desc = "Proc macro #[derive(Synced)] for app state structs. Copied from realtime-workspace rtf-macros"
+
+[[brick]]
+name = "app"
+members = ["path:crates/lattice-app/"]
+tags = ["contract"]
+desc = "App contract (06-apps): App trait, Ctx effects, instance ids and records, worker/apps actions. Sans-IO"
+
+[[brick]]
+name = "app-terminal"
+members = ["path:apps/terminal/"]
+tags = ["app"]
+desc = "Built-in terminal app (apps/terminal): vt100 emulator in the runner, TermState synced. Builds to a WASM runner package"
+
+[[brick]]
+name = "app-macros"
+members = ["path:crates/lattice-app-macros/"]
+tags = ["base"]
+desc = "Proc macro #[lattice::interface]: action enum, runner adapter, typed client (D36). Ported from realtime-workspace rtf-macros"
+
+[[brick]]
+name = "deck-ui"
+members = ["path:crates/lattice-deck-ui/"]
+tags = ["ui"]
+desc = "Deck UI library on NSH: tokens, components, workspace (tabs, splits, app picker), desktop and mobile layouts. examples/ show the wiring (D39, D42)"
+
+[[brick]]
+name = "app-echo"
+members = ["path:apps/echo/"]
+tags = ["app"]
+desc = "Built-in echo app (apps/echo): no process; runner keeps sent lines (D40). Builds to a WASM runner package"
+
+[[brick]]
+name = "app-guest"
+members = ["path:crates/lattice-app-guest/"]
+tags = ["contract"]
+desc = "WASM guest glue for app runners (ABI v0, D43): export_runner! and the alloc/init/step/snapshot exports. Second crate allowed unsafe"
+
+[[brick]]
+name = "wasm"
+members = ["path:crates/lattice-wasm/"]
+tags = ["adapter"]
+desc = "WASM host for app runners (wasmtime, ABI v0, D43): loads a runner package and drives it as a DynRunner. No imports, memory and fuel caps"
+
+[[brick]]
+name = "package"
+members = ["path:crates/lattice-package/"]
+tags = ["contract"]
+desc = "App packages (D44): app.toml manifest and spawn templates, package bytes, blake3 hash and verification"
+
+[[brick]]
+name = "builtin-apps"
+members = ["path:crates/lattice-builtin-apps/"]
+tags = ["contract"]
+desc = "Built-in app packages (D44): build.rs builds apps/* to wasm, packs them with app.toml, embeds them for the deck"
 
 [[rule]]
 from = "tag:bin"
@@ -145,6 +211,68 @@ reason = "the worker daemon runs the worker host, never the deck host"
 from = "deck"
 to = "deck-core"
 reason = "the deck app runs the deck host, never the worker host"
+
+[[rule]]
+from = "state"
+to = "state-macros"
+reason = "the SDK re-exports #[derive(Synced)]; both are base, so the edge needs its own rule"
+
+[[rule]]
+from = "tag:app"
+to = "tag:contract"
+reason = "apps implement the app contract"
+
+[[rule]]
+from = "tag:app"
+to = "tag:base"
+reason = "apps build their state from SDK synced types"
+
+[[rule]]
+from = "tag:bin"
+to = "tag:app"
+reason = "binaries register built-in apps natively in M1"
+
+[[rule]]
+from = "cli"
+to = "deck-core"
+reason = "lattice probe / attach is a minimal deck (ROADMAP M1.7); never the worker host"
+
+[[rule]]
+from = "tag:bin"
+to = "tag:ui"
+reason = "the deck binary composes the UI library"
+
+[[rule]]
+from = "app-guest"
+to = "app"
+reason = "the guest glue runs the runner core (hosted) inside the module"
+
+[[rule]]
+from = "wasm"
+to = "worker"
+scope = "test"
+reason = "integration tests run wasm runners through the apps runner"
+
+[[rule]]
+from = "wasm"
+to = "tag:app"
+scope = "test"
+reason = "integration tests build built-in apps to wasm and decode their state"
+
+[[rule]]
+from = "package"
+to = "app"
+reason = "manifests name an AppId; packages are keyed by PackageHash"
+
+[[rule]]
+from = "builtin-apps"
+to = "app"
+reason = "an embedded package exposes its PackageHash"
+
+[[rule]]
+from = "builtin-apps"
+to = "package"
+reason = "build.rs packs and hashes packages; tests verify them"
 
 [[link]]
 from = "transport"
@@ -295,6 +423,389 @@ to = "transport"
 kinds = ["implements"]
 scope = "test"
 reason = "contract tests drive the link over an in-memory fake transport"
+
+[[link]]
+from = "state"
+to = "state-macros"
+kinds = ["uses"]
+reason = "re-exports derive(Synced)"
+
+[[link]]
+from = "app"
+to = "state"
+kinds = ["uses"]
+reason = "App::State is a Synced state"
+
+[[link]]
+from = "app-terminal"
+to = "app"
+kinds = ["uses"]
+reason = "implements App for the terminal runner"
+
+[[link]]
+from = "app-terminal"
+to = "state"
+kinds = ["uses"]
+reason = "TermState is built from synced types"
+
+[[link]]
+from = "worker"
+to = "app"
+kinds = ["uses"]
+reason = "runs runners through the App contract; serves worker/apps"
+
+[[link]]
+from = "worker"
+to = "state"
+kinds = ["uses"]
+reason = "commits runner drafts into deltas"
+
+[[link]]
+from = "deck-core"
+to = "state"
+kinds = ["uses"]
+reason = "applies deltas to instance states"
+
+[[link]]
+from = "deck-core"
+to = "app"
+kinds = ["uses"]
+reason = "instance ids, records, and create/close/kill actions"
+
+[[link]]
+from = "app-terminal"
+to = "app"
+kinds = ["implements"]
+reason = "Terminal implements App"
+
+[[link]]
+from = "app-terminal"
+to = "state-macros"
+kinds = ["uses"]
+reason = "#[derive(Synced)] on TermState expands from state-macros"
+
+[[link]]
+from = "latticed"
+to = "app"
+kinds = ["uses"]
+reason = "AppId of the built-in apps it registers"
+
+[[link]]
+from = "state"
+to = "state-macros"
+kinds = ["reexports"]
+reason = "lattice_state::Synced re-exports the derive"
+
+[[link]]
+from = "worker"
+to = "app"
+kinds = ["implements"]
+scope = "test"
+reason = "host tests drive a fake App (test_app::Echo)"
+
+[[link]]
+from = "cli"
+to = "deck-core"
+kinds = ["uses"]
+reason = "probe opens a worker link and creates a terminal instance"
+
+[[link]]
+from = "cli"
+to = "quic"
+kinds = ["uses"]
+reason = "binds direct QUIC on loopback"
+
+[[link]]
+from = "cli"
+to = "key"
+kinds = ["uses"]
+reason = "deck key and worker NodeId"
+
+[[link]]
+from = "cli"
+to = "app"
+kinds = ["uses"]
+reason = "AppId of the terminal app"
+
+[[link]]
+from = "cli"
+to = "app-terminal"
+kinds = ["uses"]
+reason = "TermState replica and TermAction input"
+
+[[link]]
+from = "cli"
+to = "state"
+kinds = ["uses"]
+reason = "encodes params and actions, reads synced rows"
+
+[[link]]
+from = "deck"
+to = "app"
+kinds = ["uses"]
+reason = "AppId and InstanceId of the live terminal"
+
+[[link]]
+from = "deck"
+to = "state"
+kinds = ["uses"]
+reason = "encodes params and actions, reads synced rows"
+
+[[link]]
+from = "worker"
+to = "transport"
+kinds = ["implements"]
+scope = "test"
+reason = "host tests run over an in-memory transport"
+
+[[link]]
+from = "app"
+to = "app-macros"
+kinds = ["reexports"]
+reason = "lattice_app::interface re-exports the macro"
+
+[[link]]
+from = "app-terminal"
+to = "app-macros"
+kinds = ["uses"]
+reason = "#[interface] on TerminalApi expands from app-macros"
+
+[[link]]
+from = "app"
+to = "app-macros"
+kinds = ["uses"]
+scope = "test"
+reason = "lattice-app tests expand #[interface]"
+
+[[link]]
+from = "deck-core"
+to = "app"
+kinds = ["implements"]
+reason = "LinkCaller implements lattice_app::Caller"
+
+[[link]]
+from = "deck-core"
+to = "app-macros"
+kinds = ["uses"]
+scope = "test"
+reason = "fake worker in tests uses a generated runner"
+
+[[link]]
+from = "worker"
+to = "app-macros"
+kinds = ["uses"]
+scope = "test"
+reason = "test_app::Echo is an #[interface]"
+
+[[link]]
+from = "deck"
+to = "deck-ui"
+kinds = ["uses"]
+reason = "workspace shell, layouts, components"
+
+[[link]]
+from = "app-echo"
+to = "app"
+kinds = ["uses"]
+reason = "App and interface contract"
+
+[[link]]
+from = "app-echo"
+to = "app-macros"
+kinds = ["uses"]
+reason = "#[interface] on EchoApi"
+
+[[link]]
+from = "app-echo"
+to = "state"
+kinds = ["uses"]
+reason = "EchoState synced types"
+
+[[link]]
+from = "app-echo"
+to = "state-macros"
+kinds = ["uses"]
+reason = "#[derive(Synced)] on EchoState"
+
+[[link]]
+from = "app-guest"
+to = "app"
+kinds = ["uses"]
+reason = "hosted, DynRunner, Input, Step"
+
+[[link]]
+from = "app-guest"
+to = "state"
+kinds = ["uses"]
+reason = "encodes steps, decodes inputs (postcard)"
+
+[[link]]
+from = "app-echo"
+to = "app-guest"
+kinds = ["uses"]
+reason = "export_runner! builds the runner package"
+
+[[link]]
+from = "app-terminal"
+to = "app-guest"
+kinds = ["uses"]
+reason = "export_runner! builds the runner package"
+
+[[link]]
+from = "wasm"
+to = "app"
+kinds = ["uses", "implements"]
+reason = "WasmRunner implements DynRunner"
+
+[[link]]
+from = "wasm"
+to = "state"
+kinds = ["uses"]
+reason = "encodes inputs, decodes steps (postcard)"
+
+[[link]]
+from = "wasm"
+to = "worker"
+kinds = ["uses"]
+scope = "test"
+reason = "echo as wasm through AppsRunner"
+
+[[link]]
+from = "wasm"
+to = "app-echo"
+kinds = ["uses"]
+scope = "test"
+reason = "echo actions and state in wasm tests"
+
+[[link]]
+from = "wasm"
+to = "app-terminal"
+kinds = ["uses"]
+scope = "test"
+reason = "terminal wasm vs native parity test"
+
+[[link]]
+from = "app-echo"
+to = "app"
+kinds = ["implements"]
+reason = "Echo implements App"
+
+[[link]]
+from = "cli"
+to = "app-echo"
+kinds = ["uses"]
+reason = "probe-echo: EchoApiClient and EchoState"
+
+[[link]]
+from = "deck-core"
+to = "app"
+kinds = ["reexports"]
+reason = "re-exports Replica, ReplicaEvent"
+
+[[link]]
+from = "worker"
+to = "app"
+kinds = ["reexports"]
+reason = "re-exports the runner core (DynRunner, Input, Mode, Step, hosted)"
+
+[[link]]
+from = "wasm"
+to = "app-guest"
+kinds = ["uses"]
+reason = "ABI_VERSION the host checks"
+
+[[link]]
+from = "package"
+to = "app"
+kinds = ["uses"]
+reason = "AppId, PackageHash"
+
+[[link]]
+from = "package"
+to = "state"
+kinds = ["uses"]
+reason = "postcard encoding of packages"
+
+[[link]]
+from = "builtin-apps"
+to = "app"
+kinds = ["uses"]
+reason = "PackageHash of each embedded package"
+
+[[link]]
+from = "builtin-apps"
+to = "package"
+kinds = ["uses"]
+reason = "build.rs packs packages; tests verify them"
+
+[[link]]
+from = "worker"
+to = "package"
+kinds = ["uses"]
+reason = "spawn templates from the manifest; hash check of fetched packages"
+
+[[link]]
+from = "latticed"
+to = "package"
+kinds = ["uses"]
+reason = "verifies fetched and cached packages"
+
+[[link]]
+from = "latticed"
+to = "wasm"
+kinds = ["uses"]
+reason = "compiles runner modules (package loader)"
+
+[[link]]
+from = "latticed"
+to = "builtin-apps"
+kinds = ["uses"]
+scope = "test"
+reason = "loader tests use the real built-in packages"
+
+[[link]]
+from = "deck"
+to = "builtin-apps"
+kinds = ["uses"]
+reason = "+ menu lists and create sends built-in packages"
+
+[[link]]
+from = "cli"
+to = "builtin-apps"
+kinds = ["uses"]
+reason = "probes send built-in packages"
+
+[[link]]
+from = "wasm"
+to = "builtin-apps"
+kinds = ["uses"]
+scope = "test"
+reason = "wasm tests run the packages the deck ships"
+
+[[link]]
+from = "wasm"
+to = "package"
+kinds = ["uses"]
+scope = "test"
+reason = "wasm tests unpack the runner module"
+
+[[link]]
+from = "deck"
+to = "wasm"
+kinds = ["uses"]
+reason = "runs each pane's viewer.wasm (D42, D43)"
+
+[[link]]
+from = "deck"
+to = "package"
+kinds = ["uses"]
+reason = "verifies a built-in package before loading its viewer module"
+
+[[link]]
+from = "deck"
+to = "sync-proto"
+kinds = ["uses"]
+reason = "reads BlobRequest, ActionResult and stream ids on the worker link"
 
 [[complexity]]
 bricks = "*"

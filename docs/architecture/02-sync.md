@@ -23,21 +23,22 @@ Blob     { blake3_hash, ciphertext }                             // verified str
 - Single-writer streams: `covers` is one `seq`.
 - Multi-writer streams (`Doc`): one log per writer; `covers` is a version vector.
 - Signatures cover batches of changes, not each change, so high-rate streams stay cheap.
+- Stream `id` (proposed): at most 255 bytes; non-empty segments of `[a-z0-9._-]` separated by `/`, no leading or trailing `/`. Example: `inst/42/state`.
 
 ## Stream kinds
 
 | Kind | Writer | Change | Snapshot | Compaction | Used for |
 |---|---|---|---|---|---|
-| `Log` | single | append entry | optional checkpoint | drop by age/size; never coalesce | agent hook events, raw PTY bytes, command history |
-| `State` | single | diff (dirty rows/cells, cursor, modes) | full value | coalesce: slow readers skip stale diffs (mosh SSP) | terminal screen, app view-model |
+| `Log` | single | append entry | optional checkpoint | drop by age/size; never coalesce | TBD: still needed? Raw PTY bytes stay in the instance journal on the worker (04-worker.md) |
+| `State` | single | delta of a typed state (06-apps.md › State), with `version` | full state | queue of the last 1024 deltas; older readers get the full state | app instance state, `worker/apps` |
 | `Series` | single | batch of points | rollups | downsample old points to coarser buckets | cpu/mem, latency, custom metrics |
 | `Doc` | multi | CRDT update bytes (Loro) | CRDT snapshot | merge, then snapshot | device config, layouts, app settings |
 
-Raw PTY bytes are a `Log` (scrollback, exact replay). The parsed screen is a separate `State`. A deck may subscribe to either or both.
+Raw PTY bytes stay on the worker, in the instance journal (04-worker.md). Decks get the parsed state only.
 
 ## Wire messages
 
-Carried on the control stream and per-stream channels (transport.md). Encoding: postcard in `u32` length-prefixed frames (D19).
+Carried on the control stream and per-stream channels (transport.md). Encoding: postcard in `u32` big-endian length-prefixed frames (D19). Max frame body: 1 MiB (proposed); a longer declared length closes the channel. The postcard enum tag is the message type.
 
 | Message | Direction | Meaning |
 |---|---|---|
@@ -49,13 +50,13 @@ Carried on the control stream and per-stream channels (transport.md). Encoding: 
 | `Ack{stream, have}` | reader → owner | Flow control; enables coalescing per reader |
 | `Unsubscribe{stream}` | reader → owner | Stop |
 | `Action{target, id, name, payload}` | reader → owner | Request a state change |
-| `ActionResult{id, ok \| err}` | owner → reader | Outcome; effects arrive as changes |
+| `ActionResult{id, error, result, detail}` | owner → reader | Outcome; effects arrive as changes. `result`: the encoded reply on success. `error` + `detail`: a stable code; `detail` holds the app's error (postcard) and is empty for a platform error (06-apps.md, Interface) |
 | `BlobRequest{hash, ranges}` | any | Fetch content-addressed bytes |
 
 Rules:
 
 1. Resume is always by cursor (`have`). Reconnect never needs a full reload unless compacted.
-2. A reader that falls behind a `State` stream gets the newest diff from its last ack, not every frame.
+2. A `State` reader applies a change only at `version == held + 1`. Otherwise it resubscribes and gets a snapshot.
 3. A reader behind the retention of a `Log` stream gets `Gap{new_start}` and a snapshot if one exists.
 4. Actions are typed per stream schema. Owners validate and may reject.
 5. Unknown message types return `Error{unsupported}`. They never close the connection.
@@ -76,9 +77,10 @@ Rules:
 
 | Thing | Streams |
 |---|---|
-| Shell in a PTY | `proc/<id>/raw` Log · `proc/<id>/screen` State · actions `input`, `resize`, `signal` |
-| claude-code | the above + `proc/<id>/events` Log (hooks) · app view-model State · actions `approve`, `deny`, `prompt` |
-| Worker health | `worker/metrics` Series |
+| Apps and instances on a worker | `worker/apps` State · actions `create`, `close` (06-apps.md) |
+| Shell (`terminal` instance) | `inst/<iid>/state` State (screen, scrollback) · actions `input`, `resize` |
+| claude-code (`coding_agent` instance) | TBD after M1 |
+| Worker health (`metrics` instance) | `inst/<iid>/state` State (rollups) · TBD: keep `Series` or fold it into typed state? |
 | User settings | `user/meta` Doc |
 
 ## Open questions

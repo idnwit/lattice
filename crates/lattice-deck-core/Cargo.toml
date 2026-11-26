@@ -1,6 +1,6 @@
 [package]
 name = "lattice-deck-core"
-description = "Deck host: worker links, sessions/tabs/panes model, input actions. No UI."
+description = "Deck host: worker links, sessions/tabs/panes model, instance replicas, app actions. No UI."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,14 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+lattice-app.workspace = true
 lattice-key.workspace = true
+lattice-state.workspace = true
 lattice-sync-proto.workspace = true
 lattice-transport.workspace = true
+serde.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true

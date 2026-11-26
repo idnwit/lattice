@@ -5,15 +5,18 @@ Owns: agent lifecycle, views, hook events, approvals, agents overview.
 
 ## Summary
 
-An agent is a coding-agent CLI (claude-code, codex, …) running in a pane PTY on a worker.
-`latticed` captures its hook events into an `events` Log stream. The coding-agent app turns them into a Visual view on top of the live PTY. See [architecture/04-worker.md](../architecture/04-worker.md) › Structured events.
+An agent is a `coding_agent` app instance (claude-code, codex, …) on a worker. Its CLI runs in a PTY.
+Agents open only from the deck UI.
+TBD: hook event capture is designed after the M1 terminal PoC (architecture/04-worker.md › Structured events). The coding-agent app turns them into a Visual view on top of the live PTY. See [architecture/04-worker.md](../architecture/04-worker.md) › Structured events.
 
 ## Lifecycle
 
-1. `+ Agent` (`⌘⇧A`) or `+` menu › `Agent · <name>` starts an agent in a new pane of the current session.
-2. The PTY never stops when views change. All views share one event cursor.
-3. Agent states: `working`, `waiting` (approval), `idle`, `done`, `error`.
-4. Completion raises a toast: "Agent `refactor-auth` finished on build-01 · 12 files" + `Review`.
+1. `+ Agent` (`⌘⇧A`) or `+` menu › `Agent · <name>` starts an agent in a new pane of the current session. The deck sends `create` for that agent app (architecture/06-apps.md).
+2. v1 has no params form. The agent starts in the session cwd. TBD: params form (env, model, first prompt) later?
+3. Running the agent CLI by hand in a shell gives a plain terminal. It is not an agent: no Visual view, no approvals, no agents overview row.
+4. The PTY never stops when views change. All views share one event cursor.
+5. Agent states: `working`, `waiting` (approval), `idle`, `done`, `error`.
+6. Completion raises a toast: "Agent `refactor-auth` finished on build-01 · 12 files" + `Review`.
 
 ## Hook events
 

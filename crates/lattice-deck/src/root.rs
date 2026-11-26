@@ -1,0 +1,391 @@
+//! The deck's root: the M1 PoC shell (D40, D41; specs/03-sessions.md, M1 PoC deck).
+//!
+//! Workspace only: tabs, splits, the `+` menu of built-in apps, the empty-pane app picker,
+//! the close confirmation, and a status line for the local worker link. Each live pane draws
+//! its instance's view tree ([`crate::interp`]). On a phone-width window the workspace shows
+//! the focused pane only, with a pager over it (`pane n/m`).
+
+use std::collections::BTreeMap;
+use std::rc::Rc;
+
+use lattice_builtin_apps::Builtin;
+use lattice_deck_core::PaneId;
+use lattice_deck_ui::components::{Status, link_indicator, pane_switcher, status_bar};
+use lattice_deck_ui::layout::{Layout, Panels, Region, Regions, Shell, responsive_layout};
+use lattice_deck_ui::style::{body, meta, spacer};
+use lattice_deck_ui::tokens::{color, row, space};
+use lattice_deck_ui::workspace::{
+    AppChoice, Axis, Confirm, PaneHeader, SplitNode, TabBar, TabItem, app_picker, bind_pane_keys,
+    confirm_card, pane_frame, pane_header, split_view,
+};
+use nsh_core::element::desktop::{current_window, window as app_window};
+use nsh_core::prelude::*;
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::link::{Cmd, Shared};
+use crate::workspace::{App, CloseAsk, Content, Pane, Workspace};
+
+/// Desktop canvas size (artboard "Desktop / Web — Advanced workspace").
+const DESKTOP_SIZE: (f32, f32) = (1440.0, 900.0);
+/// Mobile canvas size (artboards "Mobile — …").
+const MOBILE_SIZE: (f32, f32) = (390.0, 844.0);
+/// Opens the `+` menu (specs/09-keyboard.md: `⌘T`).
+const NEW_TAB_KEY: &str = "mod+t";
+
+/// Size of the window when it opens on a desktop.
+///
+/// `LATTICE_DECK_LAYOUT=mobile` opens a phone-sized window, so the mobile
+/// layout can be shown on macOS. On iOS the window fills the screen.
+fn opening_size() -> Size<Points> {
+    let mobile = std::env::var("LATTICE_DECK_LAYOUT").is_ok_and(|v| v == "mobile");
+    let (w, h) = if mobile { MOBILE_SIZE } else { DESKTOP_SIZE };
+    size(px(w), px(h))
+}
+
+/// The apps this deck ships: every built-in package (D44), in app id order.
+fn apps() -> Vec<AppChoice> {
+    lattice_builtin_apps::PACKAGES
+        .iter()
+        .map(|p| AppChoice::new(p.id, p.name))
+        .collect()
+}
+
+/// Handles the views share. `Copy`.
+#[derive(Clone, Copy)]
+struct Deck {
+    shared: Shared,
+    /// The link's command queue; `None` without a worker.
+    cmds: Stored<Option<UnboundedSender<Cmd>>>,
+}
+
+impl Deck {
+    fn ws(self, f: impl FnOnce(&mut Workspace)) {
+        self.shared.ws.update(f);
+    }
+
+    /// Sends `cmd` to the link. False without a worker or once the link ended.
+    fn send(self, cmd: Cmd) -> bool {
+        self.cmds
+            .with(|c| c.as_ref().is_some_and(|tx| tx.send(cmd).is_ok()))
+    }
+
+    fn create(self, pane: PaneId, app: &'static Builtin) {
+        if !self.send(Cmd::Create { pane, app }) {
+            self.ws(|w| w.failed(pane, "deck.no_worker".to_owned()));
+        }
+    }
+
+    /// `+` menu: a new tab creating `app_id`.
+    fn open(self, app_id: &str) {
+        let Some(app) = lattice_builtin_apps::by_id(app_id) else {
+            return;
+        };
+        let mut pane = None;
+        self.ws(|w| pane = w.new_tab(app_of(app)));
+        if let Some(pane) = pane {
+            self.create(pane, app);
+        }
+    }
+
+    /// App picker: pane `pane` creates `app_id`.
+    fn pick(self, pane: PaneId, app_id: &str) {
+        let Some(app) = lattice_builtin_apps::by_id(app_id) else {
+            return;
+        };
+        let mut picked = false;
+        self.ws(|w| picked = w.pick(pane, app_of(app)));
+        if picked {
+            self.create(pane, app);
+        }
+    }
+
+    /// `⌘D` / `⌘⇧D`: a picker pane after the focused one.
+    fn split(self, axis: Axis) {
+        let mut added = None;
+        self.ws(|w| added = w.split(axis));
+        if added.is_none() {
+            tracing::debug!("nothing to split");
+        }
+    }
+
+    /// `⌘W`: close the focused pane, asking first when it holds an instance.
+    fn close(self) {
+        let mut ask = CloseAsk::Nothing;
+        self.ws(|w| ask = w.ask_close());
+        if ask == CloseAsk::Nothing {
+            tracing::debug!("nothing to close");
+        }
+    }
+
+    fn confirm(self) {
+        let mut iid = None;
+        self.ws(|w| iid = w.confirm_close());
+        if let Some(iid) = iid
+            && !self.send(Cmd::Close { iid })
+        {
+            // No link: nothing will ever answer; the pane goes now.
+            self.ws(|w| w.instances(&[]));
+        }
+    }
+}
+
+fn app_of(b: &Builtin) -> App {
+    App {
+        id: b.id.to_owned(),
+        name: b.name.to_owned(),
+    }
+}
+
+/// Root component: one window; the layout follows its width.
+///
+/// NSH window model v2: the app host never shows; the app declares its own
+/// window. Off the desktops (iOS) the window's content fills the app surface.
+#[component]
+pub fn DeckApp() -> impl IntoElement {
+    lattice_deck_ui::fonts::register();
+    let shared = Shared {
+        ws: signal(Workspace::default()),
+        trees: signal(BTreeMap::new()),
+        status: signal("no worker".to_owned()),
+    };
+    let deck = Deck {
+        shared,
+        cmds: stored(crate::link::start(shared)),
+    };
+    app_window()
+        .id("main")
+        .title("Lattice")
+        .default_size(opening_size())
+        .content(move || screen(deck))
+}
+
+fn screen(deck: Deck) -> View {
+    // A binary started from a terminal is not activated by macOS: bring the window front.
+    let win = current_window();
+    effect(move || win.focus());
+    bind_pane_keys(move |axis| deck.split(axis), move || deck.close());
+    let status = deck.shared.status;
+    let shell = Shell::new(move || workspace(deck)).status(move || {
+        status_bar()
+            .child(dynamic(move || {
+                let text = status.get();
+                link_indicator(link_status(&text), &text)
+            }))
+            .child(spacer())
+            .child(meta("⌘T new tab · ⌘D split · ⌘W close"))
+    });
+    responsive_layout(
+        shell,
+        Panels::new(false, false),
+        Regions::new(Region::Workspace),
+    )
+}
+
+/// The link line's glyph: shape + hue from its text.
+fn link_status(text: &str) -> Status {
+    match text {
+        t if t.starts_with("direct") => Status::Online,
+        t if t.starts_with("relay") => Status::Relay,
+        "connecting" => Status::Idle,
+        "no worker" => Status::Offline,
+        _ => Status::Error,
+    }
+}
+
+fn workspace(deck: Deck) -> View {
+    let ws = deck.shared.ws;
+    let bar = TabBar::new(move || ws.with(tab_items), move || ws.with(|w| w.active))
+        .apps(apps())
+        .menu_key(NEW_TAB_KEY)
+        .on_select(move |i| deck.ws(|w| w.select(i)))
+        .on_pick(move |id| deck.open(&id))
+        .on_split(move |axis| deck.split(axis));
+    let mobile = computed(|| Layout::for_width(window().width.0) == Layout::Mobile);
+    view()
+        .flex_1()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .child(bar.render())
+        .child(dynamic(move || {
+            let mobile = mobile.get();
+            ws.with(|w| match w.tab() {
+                None => {
+                    let height = if mobile { row::ROW_TOUCH } else { row::ROW_MD };
+                    app_picker(&apps(), height, move |id| deck.open(&id))
+                }
+                Some(tab) if mobile => focused_page(deck, w, &tab.root, tab.focused),
+                Some(tab) => {
+                    let focused = tab.focused;
+                    let confirming = w.confirming;
+                    split_view(&tab.root, &|p: &Pane| {
+                        pane_view(deck, p, p.id == focused, confirming == Some(p.id), false)
+                    })
+                }
+            })
+        }))
+}
+
+fn tab_items(w: &Workspace) -> Vec<TabItem> {
+    w.tabs
+        .iter()
+        .map(|t| {
+            let leaves = t.root.leaves();
+            let status = if leaves
+                .iter()
+                .any(|p| matches!(p.content, Content::Failed { .. }))
+            {
+                Status::Error
+            } else {
+                Status::Online
+            };
+            TabItem {
+                name: t.name.to_lowercase(),
+                status,
+                panes: leaves.len(),
+            }
+        })
+        .collect()
+}
+
+/// Mobile: the focused pane only; a pager over it when the tab has more than one.
+fn focused_page(deck: Deck, w: &Workspace, root: &SplitNode<Pane>, focused: PaneId) -> View {
+    let leaves = root.leaves();
+    let at = leaves.iter().position(|p| p.id == focused).unwrap_or(0);
+    let Some(pane) = leaves.get(at) else {
+        return view();
+    };
+    let pages: Vec<Status> = leaves.iter().map(|p| pane_status(&p.content)).collect();
+    view()
+        .flex_1()
+        .min_h(px(0.0))
+        .when(pages.len() > 1, |v| {
+            v.child(pane_switcher(
+                &pages,
+                at,
+                &title(&pane.content),
+                move || {
+                    deck.ws(Workspace::next_pane);
+                },
+            ))
+        })
+        .child(pane_view(
+            deck,
+            pane,
+            true,
+            w.confirming == Some(pane.id),
+            true,
+        ))
+}
+
+fn pane_status(c: &Content) -> Status {
+    match c {
+        Content::Failed { .. } => Status::Error,
+        Content::Picker | Content::Starting(_) => Status::Idle,
+        Content::Live { .. } | Content::Closing { .. } => Status::Online,
+    }
+}
+
+fn title(c: &Content) -> String {
+    match c {
+        Content::Picker => "empty".to_owned(),
+        Content::Starting(app)
+        | Content::Live { app, .. }
+        | Content::Closing { app, .. }
+        | Content::Failed { app, .. } => app.name.to_lowercase(),
+    }
+}
+
+/// One pane: frame, header, the close confirmation when asked, and its content.
+fn pane_view(deck: Deck, pane: &Pane, focused: bool, confirming: bool, mobile: bool) -> View {
+    let id = pane.id;
+    let mut header = PaneHeader::new(
+        id.to_string(),
+        pane_status(&pane.content),
+        title(&pane.content),
+    );
+    header.focused = focused;
+    header.context = "local".to_owned();
+    header.note = match &pane.content {
+        Content::Starting(_) => Some("starting".to_owned()),
+        Content::Closing { .. } => Some("closing".to_owned()),
+        Content::Failed { code, .. } => Some(code.clone()),
+        _ => None,
+    };
+    let height = if mobile { row::ROW_TOUCH } else { row::ROW_SM };
+    pane_frame(&id.to_string(), focused)
+        .on_press(move |_: &PressEvent| deck.ws(|w| w.focus(id)))
+        .child(pane_header(&header))
+        .when(confirming, |v| {
+            v.child(confirm_card(Confirm {
+                title: format!("Close pane {id}?"),
+                detail: "The instance stops and its history is deleted.".to_owned(),
+                action: "Close".to_owned(),
+                height,
+                on_confirm: Rc::new(move || deck.confirm()),
+                on_cancel: Rc::new(move || deck.ws(Workspace::cancel_close)),
+            }))
+        })
+        .child(content(deck, pane, focused, mobile))
+}
+
+fn content(deck: Deck, pane: &Pane, focused: bool, mobile: bool) -> View {
+    let id = pane.id;
+    match &pane.content {
+        Content::Picker => {
+            let height = if mobile { row::ROW_TOUCH } else { row::ROW_MD };
+            app_picker(&apps(), height, move |app| deck.pick(id, &app))
+        }
+        Content::Starting(app) => note(&format!("Starting {}…", app.name), None),
+        Content::Failed { app, code } => note(&format!("{} did not start", app.name), Some(code)),
+        Content::Live { iid, .. } | Content::Closing { iid, .. } => {
+            let (iid, trees) = (*iid, deck.shared.trees);
+            let tree = move || trees.with(|m| m.get(&iid).cloned().unwrap_or_default());
+            let on_event = Rc::new(move |event| {
+                deck.send(Cmd::Event { iid, event });
+            });
+            crate::interp::tree_view(tree, focused, on_event)
+        }
+    }
+}
+
+/// A centered message, with a code under it.
+fn note(text: &str, code: Option<&str>) -> View {
+    view()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap(px(space::SP_2))
+        .bg(color::BG_0)
+        .child(body(text.to_owned(), color::FG_MUTED))
+        .when_some(code, |v, c| v.child(meta(c.to_owned())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_link_line_glyph_follows_its_text() {
+        assert_eq!(link_status("direct · 3ms"), Status::Online);
+        assert_eq!(link_status("relay · 40ms"), Status::Relay);
+        assert_eq!(link_status("connecting"), Status::Idle);
+        assert_eq!(link_status("no worker"), Status::Offline);
+        assert_eq!(link_status("transport.unreachable"), Status::Error);
+    }
+
+    #[test]
+    fn tabs_show_their_pane_count_and_an_error_when_a_pane_failed() {
+        let mut w = Workspace::default();
+        let echo = App {
+            id: "dev.lattice.echo".to_owned(),
+            name: "Echo".to_owned(),
+        };
+        let pane = w.new_tab(echo).unwrap();
+        w.split(Axis::Row);
+        w.failed(pane, "deck.no_worker".to_owned());
+        let items = tab_items(&w);
+        assert_eq!(items.len(), 1);
+        assert_eq!((items[0].name.as_str(), items[0].panes), ("echo", 2));
+        assert_eq!(items[0].status, Status::Error);
+    }
+}

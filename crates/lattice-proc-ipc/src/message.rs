@@ -1,128 +1,237 @@
 //! v1 requests and replies (04-worker.md, Local IPC table).
 
-use crate::frame::{Frame, FrameError};
+use crate::frame::FrameError;
+use crate::ids::{EntryKind, ErrorCode, ExitStatus, JournalId, Offset, ProcId};
 
-/// Process id assigned by `latticed-proc`. Stable for the life of the record.
-///
-/// TBD: width of the id on the wire (u32 or u64)?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ProcId(u64);
+/// Default journal budget when `latticed` has no better value: 16 MiB.
+pub const DEFAULT_JOURNAL_BUDGET: u64 = 16 << 20;
 
-impl ProcId {
-    /// Wraps a raw id read from the wire.
-    pub fn from_raw(raw: u64) -> Self {
-        Self(raw)
+/// Smallest journal budget: the size of one `Exit` entry.
+pub const MIN_JOURNAL_BUDGET: u64 = 8;
+
+/// Longest `meta` accepted by `Open`: 64 KiB.
+pub const MAX_META_LEN: usize = 64 << 10;
+
+/// Everything `Open` needs to create a journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenSpec {
+    journal: JournalId,
+    /// App id, package hash, params, encoded by `latticed`. Opaque here.
+    meta: Vec<u8>,
+    /// Byte budget; past it the oldest entries drop.
+    budget: u64,
+}
+
+impl OpenSpec {
+    /// Builds an open request.
+    ///
+    /// # Errors
+    ///
+    /// [`FrameError::BadValue`] when `budget` is below [`MIN_JOURNAL_BUDGET`] or
+    /// `meta` is longer than [`MAX_META_LEN`].
+    pub fn try_new(journal: JournalId, meta: Vec<u8>, budget: u64) -> Result<Self, FrameError> {
+        if budget < MIN_JOURNAL_BUDGET {
+            return Err(FrameError::BadValue(tag::BUDGET));
+        }
+        if meta.len() > MAX_META_LEN {
+            return Err(FrameError::BadValue(tag::META));
+        }
+        Ok(Self {
+            journal,
+            meta,
+            budget,
+        })
     }
 
-    /// The raw id.
-    #[allow(dead_code, reason = "L1 skeleton: read by the codec once implemented")]
-    pub(crate) fn raw(self) -> u64 {
-        self.0
+    /// The journal to create.
+    pub fn journal(&self) -> &JournalId {
+        &self.journal
+    }
+
+    /// The opaque meta.
+    pub fn meta(&self) -> &[u8] {
+        &self.meta
+    }
+
+    /// Byte budget.
+    pub fn budget(&self) -> u64 {
+        self.budget
     }
 }
 
-impl std::fmt::Display for ProcId {
-    /// Decimal id, as used in stream ids (`proc/<id>/raw`).
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Absolute byte offset into a process's output since spawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Offset(u64);
-
-impl Offset {
-    /// Wraps a raw offset.
-    pub fn from_raw(raw: u64) -> Self {
-        Self(raw)
-    }
-
-    /// The raw offset.
-    #[allow(dead_code, reason = "L1 skeleton: read by the codec once implemented")]
-    pub(crate) fn raw(self) -> u64 {
-        self.0
-    }
-}
-
-/// How a child ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExitStatus {
-    /// Exited with a code.
-    Code(i32),
-    /// Killed by a signal.
-    Signal(i32),
-}
-
-/// Stable error codes of `Error{code, msg}` replies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorCode {
-    /// Unknown message type (forward compatibility rule).
-    Unsupported,
-    /// Frame or field could not be parsed.
-    Malformed,
-    /// No process with that id.
-    NoSuchProc,
-    /// `Spawn` failed (exec, PTY, or fork error).
-    SpawnFailed,
-}
-
-/// Everything `Spawn` needs. All fields are opaque to `latticed-proc`.
+/// Everything `Spawn` needs. Fields other than the journal are opaque to `latticed-proc`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnSpec {
+    journal: JournalId,
     argv: Vec<Vec<u8>>,
-    /// Env vars; latticed injects `LATTICE_PROC_ID`, `LATTICE_EVENTS_SOCK` (setter lands with spawn).
-    #[allow(dead_code, reason = "L1 skeleton: read by the codec once implemented")]
+    /// Env vars merged onto the daemon's env; latticed injects `LATTICE_INSTANCE_ID`, `LATTICE_PROC_ID`.
     env: Vec<(Vec<u8>, Vec<u8>)>,
     cwd: Vec<u8>,
     cols: u16,
     rows: u16,
-    tag: Vec<u8>,
 }
 
 impl SpawnSpec {
-    /// Builds a spawn request. `argv` must not be empty.
+    /// Builds a spawn request into `journal`. `argv` must not be empty.
     ///
     /// # Errors
     ///
     /// [`FrameError::BadValue`] when `argv` is empty or a size is zero.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
+    /// An empty `cwd` means the daemon's cwd.
     pub fn try_new(
+        journal: JournalId,
         argv: Vec<Vec<u8>>,
         cwd: Vec<u8>,
         cols: u16,
         rows: u16,
     ) -> Result<Self, FrameError> {
-        // reject empty argv, zero cols, zero rows
-        // env starts empty, tag starts empty; set them with with_env / with_tag
-        todo!()
+        if argv.is_empty() {
+            return Err(FrameError::BadValue(tag::ARGV));
+        }
+        if cols == 0 {
+            return Err(FrameError::BadValue(tag::COLS));
+        }
+        if rows == 0 {
+            return Err(FrameError::BadValue(tag::ROWS));
+        }
+        Ok(Self {
+            journal,
+            argv,
+            env: Vec::new(),
+            cwd,
+            cols,
+            rows,
+        })
     }
 
-    /// Sets the opaque tag latticed uses to find its own records after restart.
-    pub fn with_tag(mut self, tag: Vec<u8>) -> Self {
-        self.tag = tag;
-        self
+    /// Adds one env var. A later var with the same name wins.
+    ///
+    /// # Errors
+    ///
+    /// [`FrameError::BadValue`] when `name` is empty or holds `=` or NUL.
+    pub fn with_env(mut self, name: Vec<u8>, value: Vec<u8>) -> Result<Self, FrameError> {
+        if name.is_empty() || name.iter().any(|b| *b == b'=' || *b == 0) {
+            return Err(FrameError::BadValue(tag::ENV));
+        }
+        self.env.push((name, value));
+        Ok(self)
+    }
+
+    /// The journal that receives output and exit.
+    pub fn journal(&self) -> &JournalId {
+        &self.journal
+    }
+
+    /// Program and arguments. Never empty.
+    pub fn argv(&self) -> &[Vec<u8>] {
+        &self.argv
+    }
+
+    /// Env vars, in order.
+    pub fn env(&self) -> &[(Vec<u8>, Vec<u8>)] {
+        &self.env
+    }
+
+    /// Working directory; empty means inherit.
+    pub fn cwd(&self) -> &[u8] {
+        &self.cwd
+    }
+
+    /// PTY size `(cols, rows)`.
+    pub fn size(&self) -> (u16, u16) {
+        (self.cols, self.rows)
     }
 }
 
-/// One entry of a `Procs` reply.
-///
-/// Constructor and accessors land with `List` in latticed-proc and the worker's restart recovery.
+/// One process of a journal, in a `Journals` reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code, reason = "L1 skeleton: read by the codec once implemented")]
 pub struct ProcInfo {
     id: ProcId,
     pid: u32,
-    tag: Vec<u8>,
     cols: u16,
     rows: u16,
+    exit: Option<ExitStatus>,
+}
+
+impl ProcInfo {
+    /// A process record as `latticed-proc` lists it.
+    pub fn new(id: ProcId, pid: u32, size: (u16, u16), exit: Option<ExitStatus>) -> Self {
+        Self {
+            id,
+            pid,
+            cols: size.0,
+            rows: size.1,
+            exit,
+        }
+    }
+
+    /// The process id.
+    pub fn id(&self) -> ProcId {
+        self.id
+    }
+
+    /// OS pid.
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// PTY size `(cols, rows)`.
+    pub fn size(&self) -> (u16, u16) {
+        (self.cols, self.rows)
+    }
+
+    /// Exit status once it ended.
+    pub fn exit(&self) -> Option<ExitStatus> {
+        self.exit
+    }
+}
+
+/// One entry of a `Journals` reply: what `latticed` needs to rebuild a runner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalInfo {
+    journal: JournalId,
+    meta: Vec<u8>,
     start_off: Offset,
     end_off: Offset,
-    exit: Option<ExitStatus>,
+    procs: Vec<ProcInfo>,
+}
+
+impl JournalInfo {
+    /// A journal record as `latticed-proc` lists it.
+    pub fn new(
+        journal: JournalId,
+        meta: Vec<u8>,
+        range: (Offset, Offset),
+        procs: Vec<ProcInfo>,
+    ) -> Self {
+        Self {
+            journal,
+            meta,
+            start_off: range.0,
+            end_off: range.1,
+            procs,
+        }
+    }
+
+    /// The journal id (the instance id).
+    pub fn journal(&self) -> &JournalId {
+        &self.journal
+    }
+
+    /// The opaque meta set at `Open`.
+    pub fn meta(&self) -> &[u8] {
+        &self.meta
+    }
+
+    /// Kept range: `[start_off, end_off)`.
+    pub fn range(&self) -> (Offset, Offset) {
+        (self.start_off, self.end_off)
+    }
+
+    /// Its processes.
+    pub fn procs(&self) -> &[ProcInfo] {
+        &self.procs
+    }
 }
 
 /// `latticed` → `latticed-proc`.
@@ -135,21 +244,30 @@ pub enum Request {
         /// Feature bits (`GetFd`, ...).
         features: u64,
     },
-    /// Start a child on a new PTY.
+    /// Create a journal for a new app instance.
+    Open(OpenSpec),
+    /// Start a child on a new PTY; its output goes into the named journal.
     Spawn(SpawnSpec),
-    /// List process records.
+    /// List journals with their processes.
     List,
-    /// Stream output from `from_off`.
+    /// Stream journal entries from `from_off`.
     Subscribe {
-        /// Target process.
-        id: ProcId,
+        /// Target journal.
+        journal: JournalId,
         /// First offset wanted.
         from_off: Offset,
     },
     /// Stop streaming.
     Unsubscribe {
-        /// Target process.
-        id: ProcId,
+        /// Target journal.
+        journal: JournalId,
+    },
+    /// Drop every entry before `upto` (a clean point).
+    Trim {
+        /// Target journal.
+        journal: JournalId,
+        /// First offset kept.
+        upto: Offset,
     },
     /// Write bytes to the PTY.
     Input {
@@ -174,10 +292,10 @@ pub enum Request {
         /// Signal number.
         signo: i32,
     },
-    /// Forget an exited record.
-    Close {
-        /// Target process.
-        id: ProcId,
+    /// Delete a journal. Every process of it must have exited.
+    Drop {
+        /// Target journal.
+        journal: JournalId,
     },
 }
 
@@ -191,37 +309,47 @@ pub enum Reply {
         /// Feature bits (`GetFd`, ...).
         features: u64,
     },
+    /// Answer to `Open`.
+    Opened {
+        /// The new journal.
+        journal: JournalId,
+    },
     /// Answer to `Spawn`.
     Spawned {
-        /// Target process.
+        /// New process.
         id: ProcId,
         /// OS pid.
         pid: u32,
     },
     /// Answer to `List`.
-    Procs(Vec<ProcInfo>),
-    /// Output bytes starting at `off`.
-    Output {
-        /// Target process.
-        id: ProcId,
-        /// Offset of the first byte.
+    Journals(Vec<JournalInfo>),
+    /// One journal entry at `off`.
+    Entry {
+        /// Source journal.
+        journal: JournalId,
+        /// Offset of the entry.
         off: Offset,
-        /// Raw bytes.
-        bytes: Vec<u8>,
+        /// The entry.
+        entry: EntryKind,
     },
-    /// The child exited.
-    Exited {
-        /// Target process.
-        id: ProcId,
-        /// How it ended.
-        status: ExitStatus,
-    },
-    /// The subscriber lagged; bytes before `new_start` were evicted.
+    /// The subscriber lagged; entries before `new_start` were dropped.
     Gap {
-        /// Target process.
-        id: ProcId,
+        /// Source journal.
+        journal: JournalId,
         /// Oldest offset still kept.
         new_start: Offset,
+    },
+    /// Answer to `Trim`.
+    Trimmed {
+        /// Target journal.
+        journal: JournalId,
+        /// Oldest offset now kept.
+        start_off: Offset,
+    },
+    /// Answer to `Drop`.
+    Dropped {
+        /// The deleted journal.
+        journal: JournalId,
     },
     /// Request failed.
     Error {
@@ -232,152 +360,9 @@ pub enum Reply {
     },
 }
 
-/// Appends one framed request to `out`.
-#[allow(
-    clippy::todo,
-    unused_variables,
-    clippy::ptr_arg,
-    reason = "L1 skeleton: body lands with its contract test"
-)]
-pub fn encode_request(req: &Request, out: &mut Vec<u8>) {
-    // reserve header; write one TLV per field with the v1 tag table
-    // patch the header length once the payload size is known
-    todo!()
-}
+mod codec;
+mod decode;
 
-/// Parses a request frame. Unknown tags are ignored.
-///
-/// # Errors
-///
-/// [`FrameError`] on a missing or malformed field. An unknown type returns
-/// `Ok(None)`: the server answers `Error{Unsupported}` and keeps the connection.
-#[allow(
-    clippy::todo,
-    unused_variables,
-    reason = "L1 skeleton: body lands with its contract test"
-)]
-pub fn decode_request(frame: &Frame) -> Result<Option<Request>, FrameError> {
-    // match frame.msg_type() against the v1 table; unknown: Ok(None)
-    // collect known tags from frame.tlvs(), skip unknown tags
-    // build the variant; a missing required tag: MissingTag
-    todo!()
-}
-
-/// Appends one framed reply to `out`.
-#[allow(
-    clippy::todo,
-    unused_variables,
-    clippy::ptr_arg,
-    reason = "L1 skeleton: body lands with its contract test"
-)]
-pub fn encode_reply(reply: &Reply, out: &mut Vec<u8>) {
-    // same layout as encode_request, reply type codes
-    todo!()
-}
-
-/// Parses a reply frame. Same rules as [`decode_request`].
-///
-/// # Errors
-///
-/// [`FrameError`] on a missing or malformed field.
-#[allow(
-    clippy::todo,
-    unused_variables,
-    reason = "L1 skeleton: body lands with its contract test"
-)]
-pub fn decode_reply(frame: &Frame) -> Result<Option<Reply>, FrameError> {
-    // mirror of decode_request for replies
-    todo!()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::FrameDecoder;
-
-    fn roundtrip(req: &Request) -> Request {
-        let mut wire = Vec::new();
-        encode_request(req, &mut wire);
-        let mut dec = FrameDecoder::new();
-        dec.push(&wire);
-        let frame = dec.next_frame().unwrap().unwrap();
-        decode_request(&frame).unwrap().unwrap()
-    }
-
-    #[test]
-    #[ignore = "contract: lands with encode_request / decode_request"]
-    fn every_request_roundtrips() {
-        let spec = SpawnSpec::try_new(vec![b"zsh".to_vec()], b"/".to_vec(), 80, 24).unwrap();
-        let cases = [
-            Request::Hello {
-                version: crate::PROTOCOL_VERSION,
-                features: 0,
-            },
-            Request::Spawn(spec.with_tag(b"t".to_vec())),
-            Request::List,
-            Request::Subscribe {
-                id: ProcId::from_raw(1),
-                from_off: Offset::from_raw(7),
-            },
-            Request::Input {
-                id: ProcId::from_raw(1),
-                bytes: b"ls\r".to_vec(),
-            },
-            Request::Resize {
-                id: ProcId::from_raw(1),
-                cols: 120,
-                rows: 40,
-            },
-        ];
-        for case in cases {
-            assert_eq!(roundtrip(&case), case, "case={case:?}");
-        }
-    }
-
-    #[test]
-    #[ignore = "contract: lands with decode_request"]
-    fn unknown_type_decodes_to_none() {
-        let mut dec = FrameDecoder::new();
-        // len 0, type 0xFFFF, flags 0 (byte order TBD in frame.rs).
-        dec.push(&[0, 0, 0, 0, 0xFF, 0xFF, 0, 0]);
-        let frame = dec.next_frame().unwrap().unwrap();
-        assert_eq!(decode_request(&frame), Ok(None));
-    }
-
-    #[test]
-    #[ignore = "contract: lands with SpawnSpec::try_new"]
-    fn spawn_spec_rejects_empty_argv() {
-        assert!(SpawnSpec::try_new(Vec::new(), b"/".to_vec(), 80, 24).is_err());
-    }
-
-    #[test]
-    #[ignore = "contract: lands with encode_reply / decode_reply"]
-    fn gap_and_exit_replies_roundtrip() {
-        let cases = [
-            Reply::Gap {
-                id: ProcId::from_raw(2),
-                new_start: Offset::from_raw(4096),
-            },
-            Reply::Exited {
-                id: ProcId::from_raw(2),
-                status: ExitStatus::Code(0),
-            },
-            Reply::Error {
-                code: ErrorCode::Unsupported,
-                msg: String::new(),
-            },
-        ];
-        for case in cases {
-            let mut wire = Vec::new();
-            encode_reply(&case, &mut wire);
-            let mut dec = FrameDecoder::new();
-            dec.push(&wire);
-            let frame = dec.next_frame().unwrap().unwrap();
-            assert_eq!(
-                decode_reply(&frame).unwrap().unwrap(),
-                case,
-                "case={case:?}"
-            );
-        }
-    }
-}
+pub(crate) use codec::tag;
+pub use codec::{encode_reply, encode_request};
+pub use decode::{decode_reply, decode_request};

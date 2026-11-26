@@ -17,15 +17,15 @@ Node    = Split { dir: h|v, sizes, children }
         | Tabs  { children, active }
         | Stack { children }                  // mobile pages, swipe
         | Grid  { cols, rows, children }
-        | Slot  { app, widget, instance: Selector, props }
+        | Slot  { app, widget, instance: Selector, props }   // instance = app instance (06-apps.md)
         | ForEach { match: Selector, template: Node }
-Selector = { worker?, session?, process?, app_kind?, app_id?, tag? }
+Selector = { worker?, session?, iid?, app_kind?, app_id? }
 ```
 
 ## Rules
 
 1. Unknown app or widget → render the `terminal` widget for that instance, or an empty slot.
-2. `ForEach` expands live: "one pane per running coding_agent in this session".
+2. `ForEach` expands live over `worker/apps`: "one pane per running coding_agent instance in this session".
 3. Platform variants: one layout may have desktop and mobile roots. Mobile maps `Split` to `Stack` by default.
 4. Schema-validated on load. Invalid layouts never crash the deck.
 5. The current feature UI (tabs, splits, right panel, mobile sheets) is the default layout set, expressed in this model.

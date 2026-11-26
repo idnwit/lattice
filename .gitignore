@@ -4,3 +4,7 @@ target/
 /.local-evident/
 /crates/lattice-deck/.nsh/
 .DS_Store
+/crates/lattice-deck-ui/.nsh/
+/crates/lattice-deck-ui/examples/gallery/.nsh/
+/crates/lattice-deck-ui/examples/gallery/target/
+/crates/lattice-deck-ui/examples/gallery/Cargo.lock

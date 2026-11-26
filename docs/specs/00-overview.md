@@ -28,7 +28,7 @@ Platform design: [../architecture/README.md](../architecture/README.md).
 | Component | Runs on | Role |
 |---|---|---|
 | `latticed-proc` | Worker | Frozen process daemon. Owns PTYs and children, raw output ring. Never restarts |
-| `latticed` | Worker | Upgradable connectivity daemon. Transport, sync, VT emulation, app host, hooks, files, SSH endpoint |
+| `latticed` | Worker | Upgradable connectivity daemon and apps runner. Transport, sync, VT emulation, app instances, hooks, files, SSH endpoint |
 | `lattice` CLI | Worker, desktop | `lattice pair`, `lattice session …`, `lo <file>`, app/layout dev tools |
 | Deck | macOS and iOS (v1), web (later) | Rust core (transport, sync, layouts) + NSH UI. 100% Rust |
 | Relay | Public (ours) or self-hosted | UDP forwarder: registration, first path, hole-punch coordination, fallback. Sees ciphertext only |
@@ -52,13 +52,21 @@ Details: [architecture/04-worker.md](../architecture/04-worker.md), [05-deck.md]
 | Worker | A machine running `latticed` + `latticed-proc`, in the device list. Named (`build-01`) |
 | Stream | Ordered, signed log of changes plus snapshots. Kinds: Log, State, Series, Doc |
 | Action | A request from a reader to a stream owner. Effects return as changes |
-| App | Worker part + view part (WASM) that gives a process type its UI. Fallback app: `terminal` |
+| App | One Rust crate that builds into a runner (worker) and a viewer (deck). Default app of a new pane: `terminal` |
+| Package | Built app: manifest, runner, viewer. Identified by its blake3 hash. Immutable |
+| App instance | One running use of an app on one worker, created by a deck. Id `iid`. Isolated from other instances |
+| Runner | Worker-side part of an app. Takes actions, drives its processes, reduces their output into state |
+| Viewer | Deck-side part of an app. Renders the instance state as a view tree and sends actions |
+| Params | Typed input to create an instance (e.g. `cwd`). Validated against the manifest |
+| Delta | Encoded changes of one committed reducer call. Decks apply deltas in version order |
+| Journal | Per-instance history in `latticed-proc`: meta plus process output and exits. The only source for restore |
+| Clean point | Journal offset where older output no longer affects state. The runner trims there |
 | Layout | Data tree that places app widgets on screen |
 | Link | The P2P connection deck ⇄ worker. Type `direct` or `relay`, with RTT |
 | Session | Named, persistent workspace on one worker (`api-server`). Holds tabs, port forwards, agents |
 | Tab | Ordered child of a session. Holds a split tree of panes |
-| Pane | One leaf in a tab: shell, agent, browser, or file viewer. Id `tab.pane` (`1.2`) |
-| Agent | A coding-agent process (claude-code, codex, …) running in a pane PTY |
+| Pane | One leaf in a tab. Shows the viewer of one app instance: shell, agent, browser, or file viewer. Id `tab.pane` (`1.2`) |
+| Agent | A `coding_agent` app instance (claude-code, codex, …), opened from the deck UI. Its process runs in a PTY |
 | Hook event | Structured event emitted by an agent (PreToolUse, PostToolUse, TodoWrite, Notification…) |
 | Approval | An agent request that waits for the user: Allow / Always / Deny |
 | View | How an agent pane renders: TTY, Visual, Zoom, Mirrored |

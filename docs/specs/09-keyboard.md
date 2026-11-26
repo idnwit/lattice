@@ -53,5 +53,6 @@ Every action has a chord. Shown with macOS glyphs; on Linux/Windows `⌘` maps t
 
 ## Open questions
 
+- TBD: chord that toggles the right panel (desktop). The `lattice-deck-ui` gallery uses `⌥⌘B` until decided.
 - TBD: `⌘T` is shown as both "new session" (worker panel) and "new tab" (chords). Pick one.
 - TBD: `Y/A/N` focus rules — only when an approval is focused?

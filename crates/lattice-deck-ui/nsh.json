@@ -1,0 +1,9 @@
+{
+  "name": "Lattice gallery",
+  "id": "dev.lattice.deck-ui.gallery",
+  "version": "0.1.0",
+  "build": 1,
+  "rust": "examples/gallery",
+  "root": "Gallery",
+  "appearance": "dark"
+}

@@ -2,7 +2,7 @@
 
 use crate::status::Status;
 use lattice_key::NodeId;
-use lattice_transport::PathInfo;
+use lattice_transport::{PathInfo, PathKind};
 use std::fmt;
 use std::str::FromStr;
 
@@ -24,14 +24,11 @@ impl PaneId {
     /// # Errors
     ///
     /// [`PaneIdError`] on zero.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn try_new(tab: u16, pane: u16) -> Result<Self, PaneIdError> {
-        // reject 0 in either part
-        todo!()
+        if tab == 0 || pane == 0 {
+            return Err(PaneIdError);
+        }
+        Ok(Self { tab, pane })
     }
 }
 
@@ -44,14 +41,16 @@ impl fmt::Display for PaneId {
 impl FromStr for PaneId {
     type Err = PaneIdError;
 
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     fn from_str(s: &str) -> Result<Self, PaneIdError> {
-        // split once on '.', parse both as u16, then try_new
-        todo!()
+        let (tab, pane) = s.split_once('.').ok_or(PaneIdError)?;
+        let part = |p: &str| {
+            if p.bytes().all(|b| b.is_ascii_digit()) {
+                p.parse::<u16>().map_err(|_| PaneIdError)
+            } else {
+                Err(PaneIdError)
+            }
+        };
+        Self::try_new(part(tab)?, part(pane)?)
     }
 }
 
@@ -79,13 +78,12 @@ impl WorkerEntry {
     }
 
     /// Link state: `Online` direct, `Relay`, or `Offline` without a link.
-    #[allow(
-        clippy::todo,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn status(&self) -> Status {
-        // None → Offline; Some(Direct) → Online; Some(Relay) → Relay
-        todo!()
+        match self.path.map(|p| p.kind()) {
+            None => Status::Offline,
+            Some(PathKind::Direct) => Status::Online,
+            Some(PathKind::Relay) => Status::Relay,
+        }
     }
 }
 
@@ -110,25 +108,18 @@ impl DeckState {
     }
 
     /// Adds or renames a worker.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn upsert_worker(&mut self, worker: WorkerEntry) {
-        // replace the entry with the same id, else append
-        todo!()
+        match self.workers.iter_mut().find(|w| w.id == worker.id) {
+            Some(w) => *w = worker,
+            None => self.workers.push(worker),
+        }
     }
 
     /// Records a new path or loss (`None`) for worker `id`.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn set_link(&mut self, id: NodeId, path: Option<PathInfo>) {
-        // find the worker; set path
-        todo!()
+        if let Some(w) = self.workers.iter_mut().find(|w| w.id == id) {
+            w.path = path;
+        }
     }
 }
 
@@ -136,11 +127,9 @@ impl DeckState {
 mod tests {
     use super::*;
     use lattice_key::{NodeKey, SecretKeyBytes};
-    use lattice_transport::PathKind;
     use std::time::Duration;
 
     #[test]
-    #[ignore = "contract: lands with PaneId"]
     fn pane_id_parses_tab_dot_pane() {
         assert_eq!("1.2".parse::<PaneId>(), PaneId::try_new(1, 2));
         assert_eq!(
@@ -153,7 +142,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "contract: lands with DeckState"]
     fn worker_status_follows_its_link() {
         let id = NodeKey::from_secret(SecretKeyBytes::new([1; 32])).node_id();
         let mut st = DeckState::new();

@@ -9,8 +9,12 @@ publish.workspace = true
 
 [dependencies]
 lattice-key.workspace = true
+postcard.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+postcard = { workspace = true, features = ["use-std"] }
 
 [lints]
 workspace = true

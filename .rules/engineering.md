@@ -54,8 +54,8 @@ Base set, every crate:
 | clippy | `unwrap_used`, `expect_used` (allowed in tests via `clippy.toml`), `panic`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, `let_underscore_must_use`, `large_futures`, `undocumented_unsafe_blocks` |
 
 - Binaries allow `clippy::print_stdout` at the crate root. Libraries never do.
-- Strict tier, parser and state crates only (rows 3–5 in `architecture.md`, plus the ring buffer module in `latticed-proc`): `indexing_slicing`, `arithmetic_side_effects`, `cast_possible_truncation`.
-- `unsafe`: only `latticed-proc` (PTY spawn in `pre_exec`). It sets `unsafe_code = "deny"` in its own lint table and has exactly one `#[allow(unsafe_code)]` with a `// SAFETY:` comment.
+- Strict tier, parser and state crates only (rows 3–5 in `architecture.md`, plus the journal module in `latticed-proc`): `indexing_slicing`, `arithmetic_side_effects`, `cast_possible_truncation`.
+- `unsafe`: only `latticed-proc` (PTY spawn in `pre_exec`) and `lattice-app-guest` (rebuilding the buffer the WASM host filled, ABI v0, D43). Each sets `unsafe_code = "deny"` in its own lint table and has exactly one `#[allow(unsafe_code)]` with a `// SAFETY:` comment. The `#[unsafe(no_mangle)]` exports come from its `export_runner!` macro, expanded in app crates.
 - `allow` needs a comment with the reason. Never `allow` a lint crate-wide to silence one site.
 - Planned checks, added with the first external dependency: `cargo deny check` (required: advisories, licenses, crates.io only, duplicate majors), `cargo machete` (advisory).
 
