@@ -60,6 +60,9 @@ pub struct AddWorker {
     pub status_text: String,
     /// Shows `New invite` (the invite expired or failed).
     pub renew: bool,
+    /// Invite lifetime in whole minutes, for "Expires in N min." (the caller's
+    /// `INVITE_TTL_SECS`).
+    pub ttl_mins: u64,
 }
 
 impl std::fmt::Debug for AddWorker {
@@ -70,6 +73,7 @@ impl std::fmt::Debug for AddWorker {
             .field("status", &self.status)
             .field("status_text", &self.status_text)
             .field("renew", &self.renew)
+            .field("ttl_mins", &self.ttl_mins)
             .finish()
     }
 }
@@ -123,7 +127,10 @@ pub fn add_worker_dialog(dialog: &AddWorker, actions: &AddWorkerActions) -> View
                         .child(state_glyph(dialog.status))
                         .child(meta(dialog.status_text.clone()).text_color(color::FG_MUTED)),
                 )
-                .child(meta("Expires in 5 min. One use."))
+                .child(meta(format!(
+                    "Expires in {} min. One use.",
+                    dialog.ttl_mins
+                )))
                 .when(dialog.renew, |v| {
                     let renew = actions.on_renew.clone();
                     v.child(

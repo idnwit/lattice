@@ -11,8 +11,10 @@
 //! may connect (specs/01-pairing.md, rules 12–14). The worker writes `<node id>@<addr>` to
 //! `$TMPDIR/lattice/worker.addr`, so `latticed add-deck` finds the listen port.
 //!
-//! `latticed add-deck <invite>` (what `lattice add-deck` runs): the worker side of pairing.
-//! It dials the deck with the worker key and adds the deck to the allowlist.
+//! `latticed add-deck [<invite>]` (what `lattice add-deck` runs): the worker side of pairing.
+//! It dials the deck with the worker key and adds the deck to the allowlist. Without the
+//! argument it reads the invite from stdin, which `ps` does not show (specs/01-pairing.md,
+//! CLI rules 2–3).
 //!
 //! Files (specs/01-pairing.md, Files): `<data dir>/worker/{node.key, decks, packages/}`.
 
@@ -60,8 +62,9 @@ struct Args {
 enum Cmd {
     /// Pair with the deck that made this invite (`lattice add-deck`; specs/01-pairing.md).
     AddDeck {
-        /// The invite code (`lattice1:…`) the deck shows.
-        invite: String,
+        /// The invite code (`lattice1:…`) the deck shows. Omit it to read the code from the
+        /// first line of stdin: other local users see arguments in `ps`.
+        invite: Option<String>,
         /// This worker's name, shown on the deck. Default: the host name.
         #[arg(long)]
         name: Option<String>,
@@ -76,7 +79,13 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let files = private_dir(&data_dir()?.join("worker"))?;
     match args.cmd {
-        Some(Cmd::AddDeck { invite, name }) => add_deck(&files, &invite, name).await,
+        Some(Cmd::AddDeck { invite, name }) => {
+            let invite = match invite {
+                Some(code) => code,
+                None => read_invite().await?,
+            };
+            add_deck(&files, &invite, name).await
+        }
         None => serve(&files, args.listen, args.proc_sock).await,
     }
 }
@@ -138,6 +147,31 @@ async fn add_deck(files: &Path, code: &str, name: Option<String>) -> anyhow::Res
         me.addr
     );
     Ok(())
+}
+
+/// Longest stdin line read as an invite: a code is about 140 characters.
+const INVITE_LINE_MAX: u64 = 1024;
+
+/// The invite from the first line of stdin (specs/01-pairing.md, CLI rule 3).
+async fn read_invite() -> anyhow::Result<String> {
+    use std::io::BufRead;
+    let line = tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        std::io::stdin()
+            .lock()
+            .take(INVITE_LINE_MAX)
+            .read_line(&mut line)
+            .map(|_| line)
+    })
+    .await
+    .context("read stdin")?
+    .context("read the invite from stdin")?;
+    let code = line.trim();
+    anyhow::ensure!(
+        !code.is_empty(),
+        "no invite: pass it as an argument or on stdin"
+    );
+    Ok(code.to_owned())
 }
 
 /// The port the running `latticed` listens on, from `worker.addr`.

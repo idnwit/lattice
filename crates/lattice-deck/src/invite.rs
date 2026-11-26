@@ -5,7 +5,7 @@
 //! Each invite has a generation. A report for an older generation is ignored: `New invite`
 //! replaced that invite.
 
-use lattice_deck_core::PairStep;
+use lattice_deck_core::{INVITE_TTL_SECS, PairStep};
 use lattice_deck_ui::components::{AddWorker, Status};
 
 /// Where the open invite is (rule 11).
@@ -174,6 +174,7 @@ impl InviteDialog {
             status,
             status_text,
             renew: matches!(self.status, InviteStatus::Expired | InviteStatus::Failed(_)),
+            ttl_mins: INVITE_TTL_SECS / 60,
         }
     }
 }

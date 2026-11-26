@@ -1,10 +1,11 @@
 //! The invite check, and `accept_pair` over an in-memory transport.
 
 use super::*;
+use crate::PAIR_TIMEOUT;
 use bytes::Bytes;
 use lattice_key::{NodeKey, SecretKeyBytes};
 use lattice_transport::{CloseReason, PathInfo, PathKind};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
@@ -66,12 +67,15 @@ fn deny_codes_are_stable_and_namespaced() {
     assert_eq!(PairDeny::Used.code(), "pair.used");
 }
 
-/// One scripted worker connection: its NodeId, deck ← worker, deck → worker.
-type Scripted = (NodeId, DuplexStream, DuplexStream);
+/// How a connection was closed, if it was.
+type Closed = Arc<Mutex<Option<CloseReason>>>;
+
+/// One scripted worker connection: its NodeId, deck ← worker, deck → worker, close slot.
+type Scripted = (NodeId, DuplexStream, DuplexStream, Closed);
 
 /// Hands out one scripted worker connection per entry (last first), then closes.
 struct Workers(Mutex<Vec<Scripted>>);
-struct Accepted(NodeId, Mutex<Option<(DuplexStream, DuplexStream)>>);
+struct Accepted(NodeId, Mutex<Option<(DuplexStream, DuplexStream)>>, Closed);
 struct PipeSend(Option<DuplexStream>);
 struct PipeRecv(DuplexStream);
 
@@ -85,7 +89,9 @@ impl Transport for Workers {
     async fn accept(&self) -> Result<(NodeId, Accepted), TransportError> {
         let next = self.0.lock().unwrap().pop();
         match next {
-            Some((peer, r, w)) => Ok((peer, Accepted(peer, Mutex::new(Some((r, w)))))),
+            Some((peer, r, w, closed)) => {
+                Ok((peer, Accepted(peer, Mutex::new(Some((r, w))), closed)))
+            }
             None => Err(TransportError::Closed),
         }
     }
@@ -129,8 +135,8 @@ impl Conn for Accepted {
         self.0
     }
 
-    fn close(&self, _reason: CloseReason) {
-        // Not observed by these tests.
+    fn close(&self, reason: CloseReason) {
+        *self.2.lock().unwrap() = Some(reason);
     }
 }
 
@@ -157,12 +163,30 @@ impl RecvStream for PipeRecv {
     }
 }
 
-/// A worker that sends `PairRequest{secret}`, reads the answer, then finishes.
+/// What a scripted worker does.
+#[derive(Clone, Copy, PartialEq)]
+enum Script {
+    /// Sends `PairRequest`; on `PairOk` sends `PairDone` and waits for the deck to end.
+    Confirm,
+    /// Sends `PairRequest`, reads the answer, and stops without `PairDone`.
+    NoDone,
+    /// Connects and sends nothing.
+    Silent,
+}
+
+/// The answer the worker read, and whether the deck ended its stream after `PairDone`.
+type Outcome = (Option<Message>, bool);
+
 async fn worker(
     mut to_deck: DuplexStream,
     mut from_deck: DuplexStream,
     secret: PairSecret,
-) -> Message {
+    script: Script,
+) -> Outcome {
+    if script == Script::Silent {
+        // Holds the pipes open and says nothing.
+        std::future::pending::<()>().await;
+    }
     let req = Message::PairRequest {
         secret,
         name: "build-01".to_owned(),
@@ -180,24 +204,45 @@ async fn worker(
         let n = from_deck.read(&mut buf).await.unwrap();
         dec.push(&buf[..n]);
     };
+    let ok = matches!(reply, Message::PairOk { .. });
+    let mut deck_ended = false;
+    if ok && script == Script::Confirm {
+        let mut wire = Vec::new();
+        encode(&Message::PairDone, &mut wire).unwrap();
+        to_deck.write_all(&wire).await.unwrap();
+        deck_ended = from_deck.read(&mut buf).await.unwrap() == 0;
+    }
     drop(to_deck);
-    reply
+    (Some(reply), deck_ended)
 }
 
-/// One scripted worker: the transport entry and the worker task.
-fn dial(peer: NodeId, secret: PairSecret) -> (Scripted, tokio::task::JoinHandle<Message>) {
+/// One scripted worker: the transport entry, its close slot, and the worker task.
+fn dial(
+    peer: NodeId,
+    secret: PairSecret,
+    script: Script,
+) -> (Scripted, Closed, tokio::task::JoinHandle<Outcome>) {
     let (w_to_d, d_from_w) = tokio::io::duplex(4096);
     let (d_to_w, w_from_d) = tokio::io::duplex(4096);
-    let task = tokio::spawn(worker(w_to_d, w_from_d, secret));
-    ((peer, d_from_w, d_to_w), task)
+    let task = tokio::spawn(worker(w_to_d, w_from_d, secret, script));
+    let closed = Closed::default();
+    ((peer, d_from_w, d_to_w, closed.clone()), closed, task)
+}
+
+fn sleep() -> tokio::time::Sleep {
+    tokio::time::sleep(PAIR_TIMEOUT)
+}
+
+fn closed(slot: &Closed) -> Option<CloseReason> {
+    *slot.lock().unwrap()
 }
 
 #[tokio::test]
 async fn a_good_secret_pairs_with_the_tls_node_id_after_a_bad_one() {
     let mut p = pending();
     let good = p.invite().secret().clone();
-    let (bad_conn, bad_task) = dial(id(3), wrong());
-    let (good_conn, good_task) = dial(id(2), good);
+    let (bad_conn, bad_closed, bad_task) = dial(id(3), wrong(), Script::Confirm);
+    let (good_conn, good_closed, good_task) = dial(id(2), good, Script::Confirm);
     // `accept` pops from the end: the bad worker comes first.
     let transport = Workers(Mutex::new(vec![good_conn, bad_conn]));
     let mut saved = Vec::new();
@@ -206,18 +251,10 @@ async fn a_good_secret_pairs_with_the_tls_node_id_after_a_bad_one() {
         Ok(())
     };
     let mut steps = Vec::new();
-    let worker = accept_pair(
-        &transport,
-        &mut p,
-        "minh-mbp",
-        || NOW,
-        save,
-        |s| {
-            steps.push(s);
-        },
-    )
-    .await
-    .unwrap();
+    let on_step = |s| steps.push(s);
+    let worker = accept_pair(&transport, &mut p, "minh-mbp", || NOW, save, on_step, sleep)
+        .await
+        .unwrap();
     let want = [PairStep::Serving, PairStep::Waiting, PairStep::Serving];
     assert_eq!(steps, want, "the bad callback goes back to waiting");
     assert_eq!(worker.id, id(2), "the id comes from the connection");
@@ -230,39 +267,97 @@ async fn a_good_secret_pairs_with_the_tls_node_id_after_a_bad_one() {
     let denied = Message::PairDenied {
         code: "pair.bad_secret".to_owned(),
     };
-    assert_eq!(bad_task.await.unwrap(), denied);
+    assert_eq!(bad_task.await.unwrap(), (Some(denied), false));
+    assert_eq!(closed(&bad_closed), Some(CloseReason::Refused), "rule 8");
     let ok = Message::PairOk {
         name: "minh-mbp".to_owned(),
     };
-    assert_eq!(good_task.await.unwrap(), ok);
+    assert_eq!(good_task.await.unwrap(), (Some(ok), true), "rule 9");
+    assert_eq!(closed(&good_closed), None);
+}
+
+/// Rule 10: a peer that connects and says nothing cannot hold the invite.
+#[tokio::test(start_paused = true)]
+async fn a_silent_peer_times_out_and_the_next_worker_pairs() {
+    let mut p = pending();
+    let good = p.invite().secret().clone();
+    let (silent_conn, silent_closed, silent_task) = dial(id(4), wrong(), Script::Silent);
+    let (good_conn, _, good_task) = dial(id(2), good, Script::Confirm);
+    let transport = Workers(Mutex::new(vec![good_conn, silent_conn]));
+    let mut steps = Vec::new();
+    let on_step = |s| steps.push(s);
+    let worker = accept_pair(
+        &transport,
+        &mut p,
+        "deck",
+        || NOW,
+        |_| Ok(()),
+        on_step,
+        sleep,
+    )
+    .await
+    .unwrap();
+    assert_eq!(worker.id, id(2));
+    let want = [PairStep::Serving, PairStep::Waiting, PairStep::Serving];
+    assert_eq!(steps, want);
+    assert_eq!(closed(&silent_closed), Some(CloseReason::Refused));
+    assert!(good_task.await.unwrap().1);
+    silent_task.abort();
+}
+
+/// Rule 9: no `PairDone` (say the worker's allowlist write failed), nothing saved.
+#[tokio::test]
+async fn a_worker_without_pair_done_is_not_saved() {
+    let mut p = pending();
+    let secret = p.invite().secret().clone();
+    let (conn, conn_closed, task) = dial(id(2), secret, Script::NoDone);
+    let transport = Workers(Mutex::new(vec![conn]));
+    let mut saved = Vec::new();
+    let save = |w: &PairedWorker| {
+        saved.push(w.clone());
+        Ok(())
+    };
+    let res = accept_pair(&transport, &mut p, "deck", || NOW, save, |_| {}, sleep).await;
+    assert_eq!(res, Err(DeckError::Remote("pair.unconfirmed".to_owned())));
+    assert!(saved.is_empty());
+    assert_eq!(closed(&conn_closed), Some(CloseReason::Refused));
+    task.await.unwrap();
 }
 
 #[tokio::test]
 async fn an_expired_invite_denies_and_stops() {
     let mut p = pending();
     let secret = p.invite().secret().clone();
-    let (conn, task) = dial(id(2), secret);
+    let (conn, conn_closed, task) = dial(id(2), secret, Script::Confirm);
     let transport = Workers(Mutex::new(vec![conn]));
     let late = NOW + INVITE_TTL_SECS;
-    let res = accept_pair(&transport, &mut p, "deck", || late, |_| Ok(()), |_| {}).await;
+    let res = accept_pair(
+        &transport,
+        &mut p,
+        "deck",
+        || late,
+        |_| Ok(()),
+        |_| {},
+        sleep,
+    )
+    .await;
     assert_eq!(res, Err(DeckError::Remote("pair.expired".to_owned())));
     let denied = Message::PairDenied {
         code: "pair.expired".to_owned(),
     };
-    assert_eq!(task.await.unwrap(), denied);
+    assert_eq!(task.await.unwrap(), (Some(denied), false));
+    assert_eq!(closed(&conn_closed), Some(CloseReason::Refused));
 }
 
 #[tokio::test]
-async fn a_failed_save_denies_the_worker() {
+async fn a_failed_save_after_pair_done_refuses_the_worker() {
     let mut p = pending();
     let secret = p.invite().secret().clone();
-    let (conn, task) = dial(id(2), secret);
+    let (conn, conn_closed, task) = dial(id(2), secret, Script::Confirm);
     let transport = Workers(Mutex::new(vec![conn]));
-    let fail = |_: &PairedWorker| Err("io".to_owned());
-    let res = accept_pair(&transport, &mut p, "deck", || NOW, fail, |_| {}).await;
-    assert_eq!(res, Err(DeckError::Remote("io".to_owned())));
-    let denied = Message::PairDenied {
-        code: "pair.save_failed".to_owned(),
-    };
-    assert_eq!(task.await.unwrap(), denied);
+    let fail = |_: &PairedWorker| Err("deck.workers_write".to_owned());
+    let res = accept_pair(&transport, &mut p, "deck", || NOW, fail, |_| {}, sleep).await;
+    assert_eq!(res, Err(DeckError::Remote("deck.workers_write".to_owned())));
+    assert_eq!(closed(&conn_closed), Some(CloseReason::Refused));
+    task.await.unwrap();
 }

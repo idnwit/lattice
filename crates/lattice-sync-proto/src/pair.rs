@@ -5,6 +5,7 @@
 
 use std::fmt;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use lattice_key::NodeId;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,10 @@ pub const PAIR_SECRET_LEN: usize = 32;
 
 /// Lifetime of an invite, in seconds (specs/01-pairing.md, rule 1: 5 minutes).
 pub const INVITE_TTL_SECS: u64 = 5 * 60;
+
+/// Bound on one pairing connection's exchange, on each side (specs/01-pairing.md, rule 10;
+/// proposed).
+pub const PAIR_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// RFC 4648 base32 alphabet, lower case.
 const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
@@ -177,7 +182,54 @@ fn symbol(v: u32) -> char {
     BASE32.get(i).map_or('a', |&c| char::from(c))
 }
 
-/// Inverse of [`base32_encode`]; `None` on any other character.
+/// Longest peer-sent name kept, in characters (specs/01-pairing.md, Data; proposed).
+pub const NAME_MAX_CHARS: usize = 64;
+
+/// Unicode format characters (general category Cf, Unicode 16): bidi overrides, zero-width
+/// characters, tags. Inclusive ranges.
+const FORMAT_CHARS: &[(char, char)] = &[
+    ('\u{00ad}', '\u{00ad}'),
+    ('\u{0600}', '\u{0605}'),
+    ('\u{061c}', '\u{061c}'),
+    ('\u{06dd}', '\u{06dd}'),
+    ('\u{070f}', '\u{070f}'),
+    ('\u{0890}', '\u{0891}'),
+    ('\u{08e2}', '\u{08e2}'),
+    ('\u{180e}', '\u{180e}'),
+    ('\u{200b}', '\u{200f}'),
+    ('\u{202a}', '\u{202e}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{206f}'),
+    ('\u{feff}', '\u{feff}'),
+    ('\u{fff9}', '\u{fffb}'),
+    ('\u{110bd}', '\u{110bd}'),
+    ('\u{110cd}', '\u{110cd}'),
+    ('\u{13430}', '\u{1343f}'),
+    ('\u{1bca0}', '\u{1bca3}'),
+    ('\u{1d173}', '\u{1d17a}'),
+    ('\u{e0001}', '\u{e0001}'),
+    ('\u{e0020}', '\u{e007f}'),
+];
+
+fn is_format(c: char) -> bool {
+    FORMAT_CHARS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
+}
+
+/// A name a peer sent, safe for a one-line record and a terminal (specs/01-pairing.md, Data):
+/// control characters become spaces, format characters go, then it is trimmed and cut to
+/// [`NAME_MAX_CHARS`].
+pub fn one_line_name(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .filter(|&c| !is_format(c))
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let capped: String = clean.trim().chars().take(NAME_MAX_CHARS).collect();
+    capped.trim_end().to_owned()
+}
+
+/// Inverse of [`base32_encode`]. Canonical only: `None` on any other character, on a length
+/// that leaves a partial symbol (1, 3 or 6 symbols mod 8), or on non-zero spare bits.
 fn base32_decode(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len());
     let (mut acc, mut bits) = (0u32, 0u32);
@@ -191,7 +243,9 @@ fn base32_decode(text: &str) -> Option<Vec<u8>> {
             out.push(u8::try_from(acc.wrapping_shr(bits) & 0xff).ok()?);
         }
     }
-    Some(out)
+    // `bits` is below 8 here. 5 or more spare bits: a whole symbol carries no byte.
+    let spare = acc & 1u32.wrapping_shl(bits).wrapping_sub(1);
+    (bits < 5 && spare == 0).then_some(out)
 }
 
 #[cfg(test)]

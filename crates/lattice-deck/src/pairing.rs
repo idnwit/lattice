@@ -12,8 +12,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use lattice_deck_core::{
-    DeckError, DeckFiles, INVITE_TTL_SECS, PairedWorker, PendingInvite, WorkerList, accept_pair,
-    random_secret,
+    DeckError, DeckFiles, INVITE_TTL_SECS, PAIR_TIMEOUT, PairedWorker, PendingInvite, WorkerList,
+    accept_pair, random_secret,
 };
 use lattice_quic::{QuicConfig, QuicTransport};
 use nsh_core::prelude::*;
@@ -116,6 +116,8 @@ async fn serve(pairing: Pairing, generation: u64) -> Result<PairedWorker, String
         .files
         .get()
         .ok_or_else(|| "deck.data_dir".to_owned())?;
+    // Rule 2: one open invite per data dir; held until this task ends or is cancelled.
+    let _lock = files.lock_invite().map_err(|e| e.code().to_owned())?;
     let key = files.node_key().map_err(|_| "deck.key".to_owned())?;
     let deck = key.node_id();
     let bind = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
@@ -134,7 +136,17 @@ async fn serve(pairing: Pairing, generation: u64) -> Result<PairedWorker, String
     let name = host_name();
     let save = |w: &PairedWorker| save_worker(&files, w);
     let on_step = |step| pairing.dialog.update(|d| d.step(generation, step));
-    let accept = accept_pair(&transport, &mut pending, &name, unix_now, save, on_step);
+    // Rule 10: each worker's exchange gets `PAIR_TIMEOUT` on the NSH timer.
+    let sleep = || timer(PAIR_TIMEOUT);
+    let accept = accept_pair(
+        &transport,
+        &mut pending,
+        &name,
+        unix_now,
+        save,
+        on_step,
+        sleep,
+    );
     // Rule 5 of the dialog: stop serving at the invite's expiry.
     let ttl = Duration::from_secs(INVITE_TTL_SECS);
     tokio::select! {
@@ -143,7 +155,8 @@ async fn serve(pairing: Pairing, generation: u64) -> Result<PairedWorker, String
     }
 }
 
-/// Adds `worker` to the saved worker list (rule 7: before `PairOk`).
+/// Adds `worker` to the saved worker list (rule 9: on `PairDone`). Sync file I/O on the engine
+/// thread: one tiny write per pairing, under the invite lock.
 fn save_worker(files: &DeckFiles, worker: &PairedWorker) -> Result<(), String> {
     let mut list = files
         .workers()

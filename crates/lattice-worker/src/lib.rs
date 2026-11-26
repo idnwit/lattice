@@ -42,6 +42,7 @@
 
 mod allowlist;
 mod apps;
+mod decks_file;
 mod delta_queue;
 mod error;
 mod host;

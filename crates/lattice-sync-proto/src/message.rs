@@ -48,7 +48,7 @@ pub struct Change {
 /// Number of [`Message`] variants: postcard tags `0..MESSAGE_TAGS` are known.
 /// A tag at or above it is a newer peer's message (02, rule 5).
 /// Bump when appending a variant.
-pub(crate) const MESSAGE_TAGS: u32 = 17;
+pub(crate) const MESSAGE_TAGS: u32 = 18;
 
 /// Every sync message. Variant order is the wire tag: append only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,7 +160,7 @@ pub enum Message {
         /// Where the deck reaches the worker.
         addr: SocketAddr,
     },
-    /// Deck → worker: the secret was valid; the worker is saved (rule 7).
+    /// Deck → worker: the secret was valid (rule 7). The deck saves the worker on `PairDone`.
     PairOk {
         /// Deck display name.
         name: String,
@@ -170,6 +170,9 @@ pub enum Message {
         /// Stable error code.
         code: String,
     },
+    /// Worker → deck, after `PairOk`: the deck is in the worker's allowlist, on disk. Only
+    /// now does the deck save the worker (rule 9).
+    PairDone,
 }
 
 #[cfg(test)]
@@ -178,10 +181,8 @@ mod tests {
 
     #[test]
     fn message_tags_counts_every_variant() {
-        // `PairDenied` is the last variant. Appending one must bump MESSAGE_TAGS.
-        let last = Message::PairDenied {
-            code: String::new(),
-        };
+        // `PairDone` is the last variant. Appending one must bump MESSAGE_TAGS.
+        let last = Message::PairDone;
         let wire = postcard::to_allocvec(&last).unwrap();
         assert_eq!(u32::from(wire[0]), MESSAGE_TAGS - 1);
     }

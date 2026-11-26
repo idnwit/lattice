@@ -4,8 +4,9 @@
 //!
 //! - `lattice invite`: this machine acts as a deck. Prints `lattice add-deck <invite>`,
 //!   waits for the worker to call back, and saves it to `<data dir>/deck/workers`.
+//!   It holds `deck/invite.lock` meanwhile (one open invite per data dir).
 //! - `lattice add-deck <invite>`: on a worker. Runs `latticed add-deck`, which holds the
-//!   worker key and the allowlist.
+//!   worker key and the allowlist, and hands it the invite on stdin: `ps` shows argv.
 //!
 //! The deck commands below use the deck key and the most recently paired worker
 //! (`--worker` picks another, by name or NodeId prefix).
@@ -46,6 +47,9 @@ use lattice_quic::{QuicConfig, QuicConn, QuicTransport};
 const PROBE_COLS: u16 = 100;
 /// Rows of the probe terminal.
 const PROBE_ROWS: u16 = 30;
+
+/// Longest invite code `lattice add-deck` passes on: far below a pipe buffer.
+const INVITE_ARG_MAX: usize = 1024;
 
 /// Overrides the data dir (specs/01-pairing.md, Files).
 const DATA_DIR_ENV: &str = "LATTICE_DATA_DIR";
@@ -119,9 +123,13 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-/// `lattice invite`: the deck side of pairing (specs/01-pairing.md, rules 1–11).
+/// `lattice invite`: the deck side of pairing (specs/01-pairing.md, rules 1–11, CLI rule 1).
 async fn invite(name: Option<String>) -> anyhow::Result<()> {
     let files = deck_files()?;
+    // Rule 2: one open invite per data dir, shared with the deck GUI.
+    let _lock = files
+        .lock_invite()
+        .map_err(|e| anyhow::anyhow!("{}", e.code()))?;
     let key = files.node_key().context("deck key")?;
     let deck = key.node_id();
     let transport = QuicTransport::bind(QuicConfig::direct_lan(key, "0.0.0.0:0".parse()?)).await?;
@@ -130,7 +138,8 @@ async fn invite(name: Option<String>) -> anyhow::Result<()> {
     let secret = lattice_deck_core::random_secret()?;
     let mut pending = PendingInvite::new(deck, addr, secret, unix_now());
     println!(
-        "Run this on the worker (expires in 5 min, one use):\n\n  {}\n",
+        "Run this on the worker (expires in {} min, one use):\n\n  {}\n",
+        lattice_deck_core::INVITE_TTL_SECS / 60,
         pending.command()
     );
     println!("waiting for worker…");
@@ -141,12 +150,21 @@ async fn invite(name: Option<String>) -> anyhow::Result<()> {
         list.add(w.clone());
         files.save_workers(&list).map_err(|e| e.kind().to_string())
     };
-    let paired = tokio::time::timeout(
-        ttl,
-        lattice_deck_core::accept_pair(&transport, &mut pending, &name, unix_now, save, |_| {}),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("expired"))??;
+    // Rule 10: each worker's exchange gets `PAIR_TIMEOUT`.
+    let sleep = || tokio::time::sleep(lattice_deck_core::PAIR_TIMEOUT);
+    let accept = lattice_deck_core::accept_pair(
+        &transport,
+        &mut pending,
+        &name,
+        unix_now,
+        save,
+        |_| {},
+        sleep,
+    );
+    let paired = tokio::time::timeout(ttl, accept)
+        .await
+        .map_err(|_| anyhow::anyhow!("pair.expired"))?
+        .map_err(|e| anyhow::anyhow!("pairing failed: {}", deck_code(&e)))?;
     println!(
         "paired · {} at {} ({})",
         paired.name,
@@ -156,19 +174,39 @@ async fn invite(name: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The code the CLI prints: a denial's own code, else the error's.
+fn deck_code(e: &lattice_deck_core::DeckError) -> String {
+    match e {
+        lattice_deck_core::DeckError::Remote(code) => code.clone(),
+        other => other.code().to_owned(),
+    }
+}
+
 /// `lattice add-deck`: runs `latticed add-deck` (next to this binary, else on `PATH`),
-/// which holds the worker key and the allowlist.
+/// which holds the worker key and the allowlist (specs/01-pairing.md, CLI rule 2).
+///
+/// The invite holds the secret, so it goes to `latticed` on stdin, never in argv: every
+/// local user sees argv in `ps`. The code is below the pipe buffer, so the write never
+/// blocks before `exec`.
 fn add_deck(code: &str, name: Option<String>) -> anyhow::Result<()> {
+    use std::io::Write;
     use std::os::unix::process::CommandExt;
     let sibling = std::env::current_exe()
         .ok()
         .map(|exe| exe.with_file_name("latticed"))
         .filter(|p| p.is_file());
     let mut cmd = std::process::Command::new(sibling.unwrap_or_else(|| "latticed".into()));
-    cmd.arg("add-deck").arg(code);
+    cmd.arg("add-deck");
     if let Some(name) = name {
         cmd.arg("--name").arg(name);
     }
+    let code = code.trim();
+    // A real code is about 140 characters; a longer one could fill the pipe and block.
+    anyhow::ensure!(code.len() <= INVITE_ARG_MAX, "pair.invite_malformed");
+    let (reader, mut writer) = std::io::pipe().context("pipe")?;
+    writeln!(writer, "{code}").context("write the invite to the pipe")?;
+    drop(writer);
+    cmd.stdin(reader);
     Err(cmd.exec()).context("run latticed add-deck")
 }
 
