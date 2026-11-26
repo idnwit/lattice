@@ -67,12 +67,17 @@ pub enum PathEvent {
 }
 
 /// Relay-first path FSM for one peer. Never flaps (verification.md scope).
+///
+/// Only a validated probe moves it to direct; only direct silence with a live relay
+/// moves it back. Each switch opens one duplicate window.
 #[derive(Debug)]
-#[allow(dead_code, reason = "L1 skeleton: read once the FSM is implemented")]
 pub struct PathSelector {
     active: PathKind,
     last_direct_rx: Option<Duration>,
     duplicate_until: Option<Duration>,
+    /// Direct went silent while the relay was dead: no deadline until direct speaks
+    /// again or the driver ticks with a live relay.
+    stalled: bool,
 }
 
 impl Default for PathSelector {
@@ -88,6 +93,7 @@ impl PathSelector {
             active: PathKind::Relay,
             last_direct_rx: None,
             duplicate_until: None,
+            stalled: false,
         }
     }
 
@@ -97,63 +103,65 @@ impl PathSelector {
     }
 
     /// True while packets go on both paths.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn duplicating(&self, now: Duration) -> bool {
-        // duplicate_until is set and now < duplicate_until
-        todo!()
+        self.duplicate_until.is_some_and(|until| now < until)
     }
 
     /// A punch probe round-trip succeeded both ways at `now`.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn on_probe_validated(&mut self, now: Duration) -> Option<PathEvent> {
-        // record direct rx at now
-        // already Direct: None
-        // switch to Direct, open the duplicate window, return Switched(Direct)
-        todo!()
+        self.on_direct_rx(now);
+        if self.active == PathKind::Direct {
+            return None;
+        }
+        Some(self.switch(PathKind::Direct, now))
     }
 
     /// Any packet arrived on the direct path at `now`.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
+    ///
+    /// Never switches by itself: only a validated probe does.
     pub fn on_direct_rx(&mut self, now: Duration) {
-        // record last direct rx; never switches by itself (probe validation does)
-        todo!()
+        self.last_direct_rx = Some(now);
+        self.stalled = false;
     }
 
-    /// Advances time. Call at [`PathSelector::next_deadline`] or on any event.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
+    /// Advances time. Call at [`PathSelector::next_deadline`], on any event, and when the
+    /// relay comes back alive.
     pub fn on_tick(&mut self, now: Duration, relay_alive: bool) -> Option<PathEvent> {
-        // Direct and relay alive and now - last_direct_rx >= DIRECT_SILENCE_FALLBACK:
-        //   switch to Relay, open duplicate window, return Switched(Relay)
-        // duplicate window passed: clear it, return DuplicateEnded
-        // else None
-        todo!()
+        let silent =
+            self.active == PathKind::Direct && self.silence_deadline().is_some_and(|at| now >= at);
+        if silent && relay_alive {
+            self.stalled = false;
+            return Some(self.switch(PathKind::Relay, now));
+        }
+        self.stalled = silent;
+        if self.duplicate_until.is_some_and(|until| now >= until) {
+            self.duplicate_until = None;
+            return Some(PathEvent::DuplicateEnded);
+        }
+        None
     }
 
     /// Next time the driver must call [`PathSelector::on_tick`].
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn next_deadline(&self) -> Option<Duration> {
-        // min of (last_direct_rx + DIRECT_SILENCE_FALLBACK when Direct, duplicate_until)
-        todo!()
+        let silence = match self.active {
+            PathKind::Direct if !self.stalled => self.silence_deadline(),
+            PathKind::Direct | PathKind::Relay => None,
+        };
+        match (silence, self.duplicate_until) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn silence_deadline(&self) -> Option<Duration> {
+        self.last_direct_rx
+            .map(|rx| rx.saturating_add(DIRECT_SILENCE_FALLBACK))
+    }
+
+    fn switch(&mut self, to: PathKind, now: Duration) -> PathEvent {
+        self.active = to;
+        self.duplicate_until = Some(now.saturating_add(DUPLICATE_WINDOW));
+        PathEvent::Switched(to)
     }
 }
 
@@ -177,7 +185,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "contract: lands with PathSelector"]
     fn starts_on_relay_and_goes_direct_after_probe() {
         let mut p = PathSelector::new();
         assert_eq!(p.active(), PathKind::Relay);
@@ -187,7 +194,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "contract: lands with PathSelector"]
     fn relay_fallback_after_two_seconds_of_direct_silence() {
         let mut p = PathSelector::new();
         p.on_probe_validated(ms(0));
@@ -200,7 +206,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "contract: lands with PathSelector"]
     fn direct_rx_postpones_fallback_and_the_deadline() {
         let mut p = PathSelector::new();
         p.on_probe_validated(ms(0));
@@ -215,11 +220,27 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "contract: lands with PathSelector"]
     fn no_fallback_while_relay_is_dead() {
         let mut p = PathSelector::new();
         p.on_probe_validated(ms(0));
         p.on_tick(ms(5_000), false);
         assert_eq!(p.active(), PathKind::Direct);
+    }
+
+    /// A dead relay must not turn the past silence deadline into a busy loop.
+    #[test]
+    fn a_dead_relay_leaves_no_deadline_in_the_past() {
+        let mut p = PathSelector::new();
+        p.on_probe_validated(ms(0));
+        assert_eq!(
+            p.on_tick(DUPLICATE_WINDOW, false),
+            Some(PathEvent::DuplicateEnded)
+        );
+        assert_eq!(p.on_tick(ms(5_000), false), None);
+        assert_eq!(p.next_deadline(), None);
+        assert_eq!(
+            p.on_tick(ms(6_000), true),
+            Some(PathEvent::Switched(PathKind::Relay))
+        );
     }
 }
