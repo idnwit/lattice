@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use lattice_app::{AppId, Ticket};
+use lattice_app::{AppId, InstanceId, InstancePhase, InstanceRecord, Ticket};
 use lattice_app_echo::{EchoApiClient, EchoParams, EchoState, Message};
 use lattice_app_terminal::{
     Input, Resize, Size, TermError, TermParams, TermState, TerminalApiClient,
@@ -25,8 +25,7 @@ pub(crate) async fn probe(
 ) -> anyhow::Result<()> {
     let mut link = super::open_link(worker).await?;
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let params = lattice_state::encode(&TermParams::new(home).with_size(PROBE_COLS, PROBE_ROWS))?;
+    let params = lattice_state::encode(&new_params())?;
     let app = AppId::try_new(lattice_app_terminal::APP_ID)?;
     let iid = match attach {
         Some(raw) => lattice_app::InstanceId::from_raw(raw),
@@ -37,7 +36,9 @@ pub(crate) async fn probe(
         }
     };
     println!("instance: {iid}");
-    link.subscribe(format!("inst/{iid}/state").parse()?).await?;
+    let state = format!("inst/{iid}/state");
+    link.subscribe(state.parse()?).await?;
+    link.subscribe("worker/apps".parse()?).await?;
 
     let client = TerminalApiClient::new(link.caller(iid));
     let mut resized = Some(client.resize(Resize::new(PROBE_COLS, PROBE_ROWS)));
@@ -49,9 +50,14 @@ pub(crate) async fn probe(
     while let Ok(msg) = tokio::time::timeout_at(deadline, link.next_message()).await {
         let msg = msg?;
         report_resize(&mut resized);
-        let Some((_, update)) = StateUpdate::from_message(msg, &link.worker()) else {
+        let Some((stream, update)) = StateUpdate::from_message(msg, &link.worker()) else {
             continue;
         };
+        let stream: String = stream.into();
+        if stream != state {
+            anyhow::ensure!(!failed_in(&update, iid), "instance.failed (instance {iid})");
+            continue;
+        }
         update.apply_to(&mut replica);
         // The runner binds the shell on its first output; type only after the prompt shows.
         if !typed && has_prompt(replica.state()) {
@@ -105,6 +111,24 @@ pub(crate) async fn probe_echo(worker: Option<&str>, text: &str) -> anyhow::Resu
     Ok(())
 }
 
+/// Params of a new probe instance (specs/03-sessions.md, Probe rule 1).
+/// Empty cwd: the worker picks its default. A deck path may not exist there.
+fn new_params() -> TermParams {
+    TermParams::default().with_size(PROBE_COLS, PROBE_ROWS)
+}
+
+/// True when a full `worker/apps` state lists `iid` as `failed` (Probe rule 2).
+/// `worker/apps` syncs full lists only (06-apps.md, Instances rule 4).
+fn failed_in(update: &StateUpdate, iid: InstanceId) -> bool {
+    let StateUpdate::Full { bytes, .. } = update else {
+        return false;
+    };
+    InstanceRecord::decode_list(bytes)
+        .unwrap_or_default()
+        .iter()
+        .any(|r| r.iid() == iid && r.phase() == InstancePhase::Failed)
+}
+
 /// Prints the outcome of the probe's `resize` once it settles.
 fn report_resize(ticket: &mut Option<Ticket<Size, TermError>>) {
     if let Some(outcome) = ticket.as_mut().and_then(Ticket::try_take) {
@@ -148,4 +172,38 @@ fn print_screen(state: &TermState, version: Option<u64>) {
         "--- scrollback rows: {} ---",
         state.scrollback().iter().count()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lattice_app::JournalMeta;
+
+    #[test]
+    fn a_new_probe_instance_starts_in_the_worker_default_cwd() {
+        let want = TermParams::default().with_size(PROBE_COLS, PROBE_ROWS);
+        assert_eq!(new_params(), want, "no deck-local path is sent");
+    }
+
+    fn apps(phase: InstancePhase) -> StateUpdate {
+        let app = AppId::try_new(lattice_app_terminal::APP_ID).unwrap();
+        let meta = JournalMeta::new(app, None, Vec::new(), "probe".to_owned());
+        let mut record = InstanceRecord::new(InstanceId::from_raw(4), &meta);
+        record.set_phase(phase);
+        StateUpdate::Full {
+            version: 1,
+            bytes: InstanceRecord::encode_list(&[record]),
+        }
+    }
+
+    #[test]
+    fn a_failed_probe_instance_is_seen_in_worker_apps() {
+        let iid = InstanceId::from_raw(4);
+        assert!(failed_in(&apps(InstancePhase::Failed), iid));
+        assert!(!failed_in(&apps(InstancePhase::Running), iid));
+        assert!(!failed_in(
+            &apps(InstancePhase::Failed),
+            InstanceId::from_raw(5)
+        ));
+    }
 }
