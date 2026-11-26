@@ -104,9 +104,8 @@ Add worker dialog (desktop deck):
 7. On `paired · <name>` the deck links to that worker: it is the most recently paired one.
 8. With no paired worker, the workspace shows "No worker yet." and `Add worker`, which opens the dialog.
 
-TBD: canvas artboard for the deck with no paired worker (rule 8).
-TBD: the canvas and the simulator still show the worker-shows-code flow (`lattice pair`, Scan QR / Enter code). Update both to the invite flow (D47).
-TBD: iOS adds a worker the same way (copy the command, run it on the worker); the Mobile "Pair worker" artboard changes with it.
+Canvas: "Desktop — Add worker · invite flow · no worker · link states". The simulator runs the same flow.
+TBD: iOS adds a worker the same way. The canvas shows a proposed sheet ("Mobile — Add worker"); confirm it (patterns.md › Mobile)?
 
 ## Open questions
 

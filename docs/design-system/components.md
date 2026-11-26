@@ -7,7 +7,7 @@ Token names refer to [tokens.md](tokens.md).
 
 | Variant | Fill | Border | Text | Use |
 |---|---|---|---|---|
-| primary | `accent` | none | `accent/ink`, 600 | One per surface. `Commit`, `Allow`, `Pair` |
+| primary | `accent` | none | `accent/ink`, 600 | One per surface. `Commit`, `Allow`, `Copy` |
 | secondary | `bg/2` | `line/strong` | `fg`, 500 | `New session`, `Always` |
 | ghost | transparent | none | `fg/muted` | `Cancel`, `Deny`, `Disable all` |
 | danger | `danger/bg` | `danger/border` | `error` | `Kill session` |
@@ -34,7 +34,7 @@ Role `switch` with `aria-checked` and an `aria-label` naming the target.
 ## Segmented control
 
 Container `bg/0` + `line`, `r/4`. Segment 24px high; selected `bg/3` + `fg`, others `fg/muted`.
-Used for: TTY / Visual, Session / Worker / All, Scan QR / Enter code.
+Used for: TTY / Visual, Session / Worker / All.
 
 ## Tabs (terminal)
 
