@@ -51,10 +51,11 @@ Upgrade path: `noq` (quinn fork with QUIC multipath, per-path congestion control
 The first byte demultiplexes. `0x00–0x3F` = relay message. QUIC packets always set `0x40` or `0x80` (RFC 7983 trick).
 
 ```
-REGISTER   [0x01][node_id 32][nonce 16][ts 8][sig 64]   sig = ed25519(relay_id || nonce || ts)
+REGISTER   [0x01][node_id 32][nonce 16][ts 8][sig 64][cookie 16]   sig = ed25519(relay_id || nonce || ts || cookie)
 REG_OK     [0x02][token 8][observed addr 18][ttl 2][nonce 16]   nonce echoes the REGISTER
-KEEPALIVE  [0x03][token 8]
+KEEPALIVE  [0x03][token 8][pad 10]                      pad is zero; as long as PONG
 PONG       [0x04][observed addr 18]                      detects NAT rebinding
+COOKIE     [0x05][cookie 16][nonce 16]                       answers a REGISTER without a valid cookie
 SEND       [0x10][token 8][dst node_id 32][QUIC packet]
 RECV       [0x11][src node_id 32][QUIC packet]
 PUNCH_REQ  [0x20][token 8][dst node_id 32][candidates]
@@ -70,28 +71,35 @@ Fields:
 | `ttl` | Seconds the registration lives without a keepalive |
 | `observed addr` | 16-byte IPv6 address (IPv4 as v4-mapped `::ffff:a.b.c.d`), then a 2-byte port |
 | `candidates` | Raw bytes. TBD: encoding, decided with hole punching (M2.5) |
+| `pad` | Zero bytes on send. The relay ignores their value, not their length |
 
 Bytes after the fixed fields of a fixed-size message are ignored. Later versions may append fields there.
 
 Rules:
 
 1. Relay table: `token → (node_id, src addr, expiry)`.
-2. `SEND` is accepted only from the source address bound to its token. Blocks spoofing and amplification.
+2. `SEND` is accepted only from the source address bound to its token. Blocks spoofed `SEND`s; rule 23 blocks reflection.
 3. Keepalive every 25 s. Many home NATs drop UDP mappings after ~30 s.
-4. Rate limits attach to tokens. Not needed in v1.
+4. Rate limits on `SEND` attach to tokens. Not needed in v1. `REGISTER` is rate-limited per source (rule 20).
 5. Unknown message types are dropped silently.
 6. `REGISTER` is fresh when `|relay wall clock - ts| <= 30 s`. A stale one is dropped.
-7. The relay remembers each accepted `(node_id, nonce)` until its `ts` is stale on the relay wall clock. A repeat inside that time is dropped. Blocks a replayed `REGISTER` from stealing the binding. Both checks use one clock, so a clock step never reopens a replay.
-8. The nonce cache holds at most 65,536 entries. When full, new `REGISTER`s are dropped until entries expire.
+7. Replay guard, per node: the relay keeps the highest accepted `ts` of each `node_id` and the nonces accepted at that `ts`, at most 4. A `REGISTER` passes only with a higher `ts`, or the same `ts` and a new nonce. The entry is dropped once its `ts` is stale, and a replay of it is then stale too. Blocks a replayed `REGISTER` from stealing the binding. Both checks use one clock, so a clock step never reopens a replay. One key holds one entry, however fast it registers.
+8. The relay tracks at most 131,072 nodes (proposed), counting registrations and replay entries. When full, a `REGISTER` from an unknown node is dropped; known nodes still re-register.
 9. A valid `REGISTER` gets a fresh random token. It replaces the node's previous token and address.
 10. Default registration `ttl` = 90 s. It survives 2 lost keepalives (3 x 25 s = 75 s).
-11. A `KEEPALIVE` from the bound address extends the registration by `ttl` and gets a `PONG`. A `KEEPALIVE` with a live token from another address gets a `PONG` with that address. It neither extends nor moves the binding.
+11. A `KEEPALIVE` from the bound address extends the registration by `ttl` and gets a `PONG`. A `KEEPALIVE` with a live token from another address gets a `PONG` with that address. It neither extends nor moves the binding. A `KEEPALIVE` shorter than 19 bytes, the size of a `PONG`, is dropped (rule 23).
 12. `SEND` to a node with no live registration is dropped.
 13. The client re-registers when it heard no `REG_OK` or `PONG` for 60 s. Unregistered, it sends `REGISTER` every 5 s until `REG_OK`.
 14. `PUNCH_REQ` is dropped until hole punching lands (M2.5). TBD: source of the punch nonce?
 15. The client accepts a `REG_OK` only when its nonce matches the last `REGISTER` it sent. A late or spoofed `REG_OK` cannot plant a dead token.
 16. A `PONG` with a new observed address means a NAT rebinding. The client sends a `REGISTER` at once, then at most every 5 s. It keeps its token until the matching `REG_OK`. A spoofed `PONG` then costs one `REGISTER`, never the registration.
-17. The relay checks the nonce cache before the signature. A repeated `REGISTER` costs no signature check.
+17. The relay checks the cookie, the rate limit and the replay guard before the signature. A flood costs no signature checks. The signature covers the cookie, so a `REGISTER` with a swapped cookie fails it. An on-path attacker cannot move a node's binding to its own address by putting its own cookie into the node's `REGISTER`.
+18. Cookie (return routability): a `REGISTER` whose cookie is not valid for its source address gets a `COOKIE` and changes nothing. A sender with a spoofed address never sees the cookie, so it never creates relay state.
+19. Cookie = first 16 bytes of `blake3::keyed_hash(secret, bucket || ip 16 || port 2)`. `bucket` = `unix_secs / 30`, 8 bytes big-endian. `ip` is the v4-mapped IPv6 form. A cookie is valid in its bucket and the next one. All-zero means no cookie. Each relay process draws a random 32-byte secret at start.
+20. Rate limit, after a valid cookie: each source (an IPv4 address or an IPv6 /64) gets at most 10 `REGISTER` per second, burst 20 (proposed). An IPv6 address also spends from its /48: 100 `REGISTER` per second, burst 200 (proposed). A `REGISTER` passes only when every bucket it spends from has room. Excess is dropped. A v4-mapped IPv6 address is its IPv4 source. Each tier tracks at most 65,536 buckets (proposed). When a tier is full, a new bucket evicts the least recently used one. So holding many buckets never locks a new source out. Nodes behind one IPv4 address (carrier-grade NAT) share its budget. TBD: does the relay need a per-node tier for carrier-grade NAT?
+21. `COOKIE` is 33 bytes, smaller than the 137-byte `REGISTER`, so it cannot amplify. It echoes the `REGISTER` nonce.
+22. The client keeps the cookie of a `COOKIE` whose nonce matches its last `REGISTER`, and sends a `REGISTER` with it at once. This holds registered or not. It reuses the cookie until the relay sends a new one. A late, duplicate or spoofed `COOKIE` is ignored.
+23. No relay reply is bigger than the request that caused it: `COOKIE` 33 and `REG_OK` 45 answer a 137-byte `REGISTER`, and `PONG` 19 answers a 19-byte `KEEPALIVE`. A spoofed source never gets more bytes than the sender spent.
 
 ## Relay invariants
 
@@ -101,8 +109,11 @@ Checks per [.rules/verification.md](../../.rules/verification.md).
 2. First byte `0x00–0x3F` is a relay message, anything else non-empty is QUIC. Check: test `relay_and_quic_split_on_first_byte`.
 3. `decode(encode(m)) == m` for every message. Check: proptest `every_message_roundtrips`.
 4. `SEND` is forwarded only from the address bound to a live token. Check: tests `send_accepted_only_from_the_tokens_bound_address`, `expired_token_is_refused`, `send_from_another_address_is_dropped`. Kani planned once stable.
-5. A replayed or stale `REGISTER` changes nothing. Check: tests `replayed_register_is_dropped`, `stale_register_is_dropped`, `a_replay_after_a_wall_clock_step_back_is_dropped`.
+5. A replayed or stale `REGISTER` changes nothing, even with a swapped cookie. Check: tests `replayed_register_is_dropped`, `stale_register_is_dropped`, `a_replay_after_a_wall_clock_step_back_is_dropped`, `an_older_ts_is_a_replay_even_with_a_new_nonce`, `a_swapped_cookie_breaks_the_signature`.
 6. Every message has the exact byte layout above. Check: test `every_message_has_its_spec_layout`.
+7. A `REGISTER` without a valid cookie for its source creates no relay state. Check: tests `register_without_a_valid_cookie_gets_one_and_changes_nothing`, `a_cookie_is_bound_to_its_address_and_two_buckets`, known-answer test `the_cookie_matches_the_rule_19_vector`.
+8. A flood from one key or one source never blocks another node from registering. Check: tests `a_register_flood_from_one_key_never_blocks_another_node`, `a_flooding_source_is_rate_limited`, `a_source_over_its_rate_gets_no_reg_ok`, `an_ipv6_slash_64_is_one_source`, `an_ipv6_slash_48_has_its_own_budget`, `a_full_source_table_evicts_the_idle_most_source`, `a_refused_register_creates_no_source_state`, `a_refusal_in_one_tier_charges_neither`.
+9. No relay reply is bigger than its request (rule 23). Check: tests `no_reply_is_bigger_than_its_request`, `a_short_keepalive_gets_no_pong`.
 
 ## Path invariants
 
