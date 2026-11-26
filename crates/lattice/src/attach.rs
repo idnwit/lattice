@@ -46,6 +46,8 @@ enum End {
     Exited,
     /// `--iid` names no instance (rule 2).
     Missing,
+    /// The instance is `failed` (rule 17).
+    Failed,
 }
 
 /// Runs `lattice attach` until detach, instance exit, or error.
@@ -59,17 +61,23 @@ pub(crate) async fn attach(worker: Option<&str>, iid: Option<u64>) -> anyhow::Re
     };
     link.subscribe("worker/apps".parse()?).await?;
     link.subscribe(format!("inst/{iid}/state").parse()?).await?;
-    let stops = Stops::watch()?;
-    let end = {
-        let _raw = tty.raw()?;
-        Attached::new(link, iid, origin, tty).run(stops).await
+    let mut stops = Stops::watch()?;
+    let mut attached = Attached::new(link, iid, origin, tty);
+    // Rule 18: a missing or failed `--iid` exits before raw mode.
+    let end = match attached.first_list(&mut stops).await? {
+        Some(end) => end,
+        None => {
+            let _raw = attached.tty.raw()?;
+            attached.run(stops).await?
+        }
     };
-    match end? {
+    match end {
         End::Detached => println!("detached · instance {iid}"),
         // Best effort: after SIGHUP the terminal is gone and the write fails.
         End::Stopped => drop(writeln!(std::io::stdout(), "detached · instance {iid}")),
         End::Exited => println!("instance {iid} exited"),
         End::Missing => anyhow::bail!("no instance {iid}"),
+        End::Failed => anyhow::bail!("instance.failed (instance {iid})"),
     }
     Ok(())
 }
@@ -98,6 +106,8 @@ struct Attached {
     tty: Tty,
     size: (u16, u16),
     out: tokio::io::Stdout,
+    /// False until raw mode is on: nothing is drawn before it (rule 18).
+    painting: bool,
 }
 
 impl Attached {
@@ -113,14 +123,33 @@ impl Attached {
             tty,
             size,
             out: tokio::io::stdout(),
+            painting: false,
         }
+    }
+
+    /// Reads updates until the first `worker/apps` list, in cooked mode (rule 18). State that
+    /// arrives first goes to the replica; it shows once raw mode is on.
+    async fn first_list(&mut self, stops: &mut Stops) -> anyhow::Result<Option<End>> {
+        let worker = self.link.worker();
+        while !self.presence.heard() {
+            let end = tokio::select! {
+                msg = self.link.next_message() => self.on_update(StateUpdate::from_message(msg?, &worker)).await?,
+                () = stops.recv() => Some(End::Stopped),
+            };
+            if end.is_some() {
+                return Ok(end);
+            }
+        }
+        Ok(None)
     }
 
     async fn run(mut self, mut stops: Stops) -> anyhow::Result<End> {
         let mut stdin = spawn_stdin();
         let mut winch = signal(SignalKind::window_change()).context("watch SIGWINCH")?;
         let worker = self.link.worker();
+        self.painting = true;
         self.resize().await?;
+        self.draw().await?;
         loop {
             let end = tokio::select! {
                 msg = self.link.next_message() => self.on_update(StateUpdate::from_message(msg?, &worker)).await?,
@@ -162,10 +191,14 @@ impl Attached {
             return None;
         };
         let list = InstanceRecord::decode_list(bytes)?;
-        let listed = list.iter().any(|r| r.iid() == self.iid);
-        self.presence.on_list(listed).map(|gone| match gone {
+        let phase = list
+            .iter()
+            .find(|r| r.iid() == self.iid)
+            .map(InstanceRecord::phase);
+        self.presence.on_list(phase).map(|gone| match gone {
             Gone::Exited => End::Exited,
             Gone::Missing => End::Missing,
+            Gone::Failed => End::Failed,
         })
     }
 
@@ -227,6 +260,9 @@ impl Attached {
     }
 
     async fn draw(&mut self) -> anyhow::Result<()> {
+        if !self.painting {
+            return Ok(());
+        }
         let state = self.replica.state();
         let rows: Vec<&[Run]> = state.screen().iter().map(|r| r.get().runs()).collect();
         let frame = self.painter.paint(&rows, state.cursor());

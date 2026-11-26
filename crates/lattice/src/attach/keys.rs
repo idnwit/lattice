@@ -1,5 +1,7 @@
 //! Stdin bytes and `worker/apps` lists as attach decisions (specs/03-sessions.md, Attach). Sans-IO.
 
+use lattice_app::InstancePhase;
+
 /// The detach key: `Ctrl-\` (rule 8).
 pub(super) const DETACH_KEY: u8 = 0x1C;
 
@@ -34,13 +36,15 @@ pub(super) enum Origin {
     Existing,
 }
 
-/// Why the attach ends, read from `worker/apps` (rules 2, 10).
+/// Why the attach ends, read from `worker/apps` (rules 2, 10, 17).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Gone {
     /// The instance was in a list and left it.
     Exited,
     /// `--iid` named an instance the first list lacks.
     Missing,
+    /// The instance is listed in phase `failed`. It stays listed; the client never closes it.
+    Failed,
 }
 
 /// Tracks the attached instance across `worker/apps` lists.
@@ -48,6 +52,7 @@ pub(super) enum Gone {
 pub(super) struct Presence {
     origin: Origin,
     seen: bool,
+    heard: bool,
 }
 
 impl Presence {
@@ -56,14 +61,21 @@ impl Presence {
         Self {
             origin,
             seen: false,
+            heard: false,
         }
     }
 
-    /// One full `worker/apps` list; `listed`: the instance is in it.
-    pub(super) fn on_list(&mut self, listed: bool) -> Option<Gone> {
-        if listed {
+    /// True once a `worker/apps` list arrived (rule 18).
+    pub(super) fn heard(&self) -> bool {
+        self.heard
+    }
+
+    /// One full `worker/apps` list; `phase`: the instance's phase there, `None` when unlisted.
+    pub(super) fn on_list(&mut self, phase: Option<InstancePhase>) -> Option<Gone> {
+        self.heard = true;
+        if let Some(phase) = phase {
             self.seen = true;
-            return None;
+            return (phase == InstancePhase::Failed).then_some(Gone::Failed);
         }
         match (self.seen, self.origin) {
             (true, _) => Some(Gone::Exited),
@@ -101,21 +113,58 @@ mod tests {
         );
     }
 
+    const RUNNING: Option<InstancePhase> = Some(InstancePhase::Running);
+    const FAILED: Option<InstancePhase> = Some(InstancePhase::Failed);
+
     #[test]
     fn created_instance_ends_only_after_it_was_listed() {
         let mut p = Presence::new(Origin::Created);
-        assert_eq!(p.on_list(false), None, "not listed yet");
-        assert_eq!(p.on_list(true), None);
-        assert_eq!(p.on_list(true), None);
-        assert_eq!(p.on_list(false), Some(Gone::Exited));
+        assert!(!p.heard());
+        assert_eq!(p.on_list(None), None, "not listed yet");
+        assert!(p.heard());
+        assert_eq!(p.on_list(Some(InstancePhase::Starting)), None);
+        assert_eq!(p.on_list(RUNNING), None);
+        assert_eq!(p.on_list(None), Some(Gone::Exited));
     }
 
     #[test]
     fn existing_instance_missing_from_first_list_is_missing() {
         let mut p = Presence::new(Origin::Existing);
-        assert_eq!(p.on_list(false), Some(Gone::Missing));
+        assert_eq!(p.on_list(None), Some(Gone::Missing));
         let mut p = Presence::new(Origin::Existing);
-        assert_eq!(p.on_list(true), None);
-        assert_eq!(p.on_list(false), Some(Gone::Exited));
+        assert_eq!(p.on_list(RUNNING), None);
+        assert_eq!(p.on_list(None), Some(Gone::Exited));
+    }
+
+    /// Attach rule 17: `failed` ends the attach, in the first list or a later one.
+    #[test]
+    fn a_failed_instance_ends_the_attach_as_failed() {
+        let cases = [
+            ("existing, first list", Origin::Existing, vec![FAILED]),
+            ("created, first list", Origin::Created, vec![FAILED]),
+            (
+                "created, spawn fails later",
+                Origin::Created,
+                vec![RUNNING, FAILED],
+            ),
+            (
+                "existing, fails later",
+                Origin::Existing,
+                vec![RUNNING, FAILED],
+            ),
+        ];
+        for (name, origin, lists) in cases {
+            let mut p = Presence::new(origin);
+            let got: Vec<Option<Gone>> = lists.into_iter().map(|l| p.on_list(l)).collect();
+            assert_eq!(got.last(), Some(&Some(Gone::Failed)), "case={name}");
+        }
+    }
+
+    #[test]
+    fn closing_and_degraded_instances_stay_attached() {
+        for phase in [InstancePhase::Closing, InstancePhase::Degraded] {
+            let mut p = Presence::new(Origin::Existing);
+            assert_eq!(p.on_list(Some(phase)), None, "case={phase:?}");
+        }
     }
 }
