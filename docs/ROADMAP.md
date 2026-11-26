@@ -18,24 +18,26 @@ Work order inside a milestone follows [architecture/09-platform-l1.md](architect
 ## M1 — Platform frame, app instances, terminal app, direct link
 
 Goal: a macOS deck creates a `terminal` app instance on a worker over QUIC on plain UDP. Restarting `latticed` never kills the shell and restores the instance.
-The instance model and create API ship here (D27). The `terminal` runner is native Rust behind the `Runner` trait; WASM arrives in M4.
+The instance model and create API ship here (D27). Runners and viewers, `terminal` included, are WASM packages already (D42, D44).
 
 M1 is a temporary step away from D2 (relay first). The deck dials `ip:port` from the pairing payload. M2 restores D2.
 
-| # | Goal | Crates | Done when |
-|---|---|---|---|
-| M1.1 | Proc IPC v1 codec: TLV, `Hello`, journals (`Open`, `Trim`, `Drop`), spawn, write, resize, subscribe, gap, exit | `lattice-proc-ipc` | Its 6 contract tests pass. Golden v1 fixtures and a fuzz target exist |
-| M1.2 | Process daemon: PTYs, per-instance journals with budget and trim, fan-out, poll loop, unix socket | `latticed-proc` | A test client opens a journal, spawns `sh`, writes, and reads back. Journal tests pass across eviction and trim. Proptest covers the journal |
-| M1.3 | Sync wire: postcard frames with `u32` length, `Hello`, `Subscribe`, `Change`, `Action` | `lattice-sync-proto` | Its 3 contract tests pass, including split reads |
-| M1.4 | Local worker host: proc client, journal subscriptions, sessions, sync session to decks | `lattice-worker` | Its contract tests pass against a real `latticed-proc`, with no network |
-| M1.4a | App SDK: synced types and `#[derive(Synced)]` (copied from `realtime-workspace`). Done: laws and postcard roundtrips pass under proptest | `lattice-state`, `lattice-state-macros` | Type laws hold under proptest: apply after commit, rollback, one encoding |
-| M1.4b | Apps runner: `worker/apps`, `create`/`close`, params validation, state stream with a 1024-delta queue, native `terminal` app | `lattice-worker`, `lattice-sync-proto` | `create{terminal}` opens a journal and a shell. `close` waits for exit, then drops it. Two instances never read each other's state. A shell `exit` closes the instance |
-| M1.4c | Restore from journals: rebuild runners from `meta`, replay with effects dropped, `clear` trims, `Gap` marks `degraded` | `lattice-worker` | After a `latticed` restart every instance returns with the same `iid` and screen. Replay writes nothing to a PTY |
-| M1.5 | Direct-only transport: quinn on a plain UDP socket, TLS bound to the ed25519 node key, NodeId pinning | `lattice-quic`, `lattice-transport` | Two local processes echo on a bi stream. A wrong NodeId is refused |
-| M1.6 | One-shot pairing by QR or connection code | `lattice`, `latticed`, `lattice-worker`, `lattice-deck` | See [M1.6 pairing](#m16-pairing) |
-| M1.7 | Headless deck: worker link, session and pane model, create and close client, state subscriptions, `lattice attach` as a minimal terminal client | `lattice-deck-core`, `lattice` | A `terminal` instance on worker B is created and used from machine A over a LAN |
-| M1.8 | macOS deck: `DeckState` replaces fixtures; terminal widget, input, resize, worker status | `lattice-deck` | Tabs and split panes work. `vim` and `htop` render correctly |
-| M1.9 | Model proof: `latticed` restarts mid-session; the instance restores; the deck reconnects and replays from its offset | all | An end-to-end test shows the process and its instance survive. Output is complete, except ranges reported as a gap |
+Status values: `done` (exit criteria met and tested), `partial` (code landed, a criterion is open), `todo`.
+
+| # | Goal | Crates | Done when | Status |
+|---|---|---|---|---|
+| M1.1 | Proc IPC v1 codec: TLV, `Hello`, journals (`Open`, `Trim`, `Drop`), spawn, write, resize, subscribe, gap, exit | `lattice-proc-ipc` | Its 6 contract tests pass. Golden v1 fixtures and a fuzz target exist | partial: golden v1 and proptest fuzz properties pass; no `fuzz/` target yet |
+| M1.2 | Process daemon: PTYs, per-instance journals with budget and trim, fan-out, poll loop, unix socket | `latticed-proc` | A test client opens a journal, spawns `sh`, writes, and reads back. Journal tests pass across eviction and trim. Proptest covers the journal | done |
+| M1.3 | Sync wire: postcard frames with `u32` length, `Hello`, `Subscribe`, `Change`, `Action` | `lattice-sync-proto` | Its 3 contract tests pass, including split reads | done |
+| M1.4 | Local worker host: proc client, journal subscriptions, sessions, sync session to decks | `lattice-worker` | Its contract tests pass against a real `latticed-proc`, with no network | done |
+| M1.4a | App SDK: synced types and `#[derive(Synced)]` (copied from `realtime-workspace`). Done: laws and postcard roundtrips pass under proptest | `lattice-state`, `lattice-state-macros` | Type laws hold under proptest: apply after commit, rollback, one encoding | done |
+| M1.4b | Apps runner: `worker/apps`, `create`/`close`, params validation, state stream with a 1024-delta queue, `terminal` app | `lattice-worker`, `lattice-sync-proto` | `create{terminal}` opens a journal and a shell. `close` waits for exit, then drops it. Two instances never read each other's state. A shell `exit` closes the instance | done (WASM runner, D42) |
+| M1.4c | Restore from journals: rebuild runners from `meta`, replay with effects dropped, `clear` trims, `Gap` marks `degraded` | `lattice-worker` | After a `latticed` restart every instance returns with the same `iid` and screen. Replay writes nothing to a PTY | partial: restore and replay unit-tested; no end-to-end restart test |
+| M1.5 | Direct-only transport: quinn on a plain UDP socket, TLS bound to the ed25519 node key, NodeId pinning | `lattice-quic`, `lattice-transport` | Two local processes echo on a bi stream. A wrong NodeId is refused | done |
+| M1.6 | One-shot pairing by QR or connection code | `lattice`, `latticed`, `lattice-worker`, `lattice-deck` | See [M1.6 pairing](#m16-pairing) | todo |
+| M1.7 | Headless deck: worker link, session and pane model, create and close client, state subscriptions, `lattice attach` as a minimal terminal client | `lattice-deck-core`, `lattice` | A `terminal` instance on worker B is created and used from machine A over a LAN | partial: link, create/close, subscriptions done; no `lattice attach`; loopback only |
+| M1.8 | macOS deck: `DeckState` replaces fixtures; terminal widget, input, resize, worker status | `lattice-deck` | Tabs and split panes work. `vim` and `htop` render correctly | partial: tabs, splits, terminal viewer, resize done; `vim` and `htop` unverified; no worker status |
+| M1.9 | Model proof: `latticed` restarts mid-session; the instance restores; the deck reconnects and replays from its offset | all | An end-to-end test shows the process and its instance survive. Output is complete, except ranges reported as a gap | todo |
 
 ### M1.6 pairing
 
@@ -120,7 +122,7 @@ Goal: runners and viewers run as WASM, one sandbox per instance (D25). The `metr
 5. `Series` stream kind for metrics.
 6. `metrics` app: an instance with no process. The runner samples CPU, memory, and GPU; the viewer renders charts.
 7. `lattice app build`, `lattice app install`, `lattice app reload`.
-8. Port the native `terminal` runner to WASM. Port Claude Code too, if M3 shipped it native.
+8. Port Claude Code to WASM, if M3 shipped it native. The `terminal` runner is WASM already (D42).
 
 - TBD: WIT world v1 host widget set and versioning scheme (decisions.md Q7)?
 - TBD: wasmtime component model with WASI 0.3 on worker and deck (decisions.md Q8)?
