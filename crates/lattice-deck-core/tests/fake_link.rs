@@ -12,7 +12,7 @@ use lattice_key::{NodeId, NodeKey, SecretKeyBytes};
 use lattice_state::Value;
 use lattice_sync_proto::{ActionId, Decoded, FrameDecoder, Message, encode};
 use lattice_transport::{
-    Conn, PathInfo, PathKind, RecvStream, SendStream, Transport, TransportError,
+    CloseReason, Conn, PathInfo, PathKind, RecvStream, SendStream, Transport, TransportError,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -99,6 +99,10 @@ impl Conn for FakeConn {
 
     fn remote_id(&self) -> NodeId {
         self.remote
+    }
+
+    fn close(&self, _reason: CloseReason) {
+        // The deck never closes a link on purpose in these tests.
     }
 }
 

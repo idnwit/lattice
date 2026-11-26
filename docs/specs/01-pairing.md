@@ -30,7 +30,7 @@ Why it is safe without a PAKE: the deck key reaches the worker through the user'
 
 ### Access
 
-12. `latticed` accepts a connection only from a NodeId in its allowlist (03-identity-security.md, Access control rule 1).
+12. `latticed` accepts a connection only from a NodeId in its allowlist (03-identity-security.md, Access control rule 1). It closes any other connection at once as refused. The deck fails with `transport.refused` and does not wait for a timeout.
 13. `latticed` rereads the allowlist file when an unknown NodeId connects, so a deck added by `lattice add-deck` connects without a restart.
 14. The allowlist and the worker list persist across restarts and reboots (data dir below).
 15. M1 has no `lattice unpair`. Remove a deck by deleting its line from the allowlist file. The device list replaces both files in M2.6.

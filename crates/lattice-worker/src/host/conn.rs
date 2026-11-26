@@ -2,7 +2,7 @@
 
 use lattice_key::NodeId;
 use lattice_sync_proto::{Decoded, FrameDecoder, Message, encode};
-use lattice_transport::{Conn, RecvStream, SendStream, Transport, TransportError};
+use lattice_transport::{CloseReason, Conn, RecvStream, SendStream, Transport, TransportError};
 use tokio::sync::mpsc;
 
 use crate::error::WorkerError;
@@ -52,7 +52,9 @@ pub(super) async fn accept_loop<T: Transport + 'static>(
         };
         if !policy.permits(&peer).await {
             tracing::warn!(?peer, "connection refused by policy");
-            continue; // dropping `conn` closes it
+            // Dropping `conn` would not close it: the transport keeps it for reuse (D4).
+            conn.close(CloseReason::Refused);
+            continue;
         }
         next = next.wrapping_add(1);
         tracing::info!(?peer, conn = next, "deck connected");

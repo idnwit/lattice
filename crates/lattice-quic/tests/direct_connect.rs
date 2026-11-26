@@ -10,7 +10,9 @@
 use bytes::Bytes;
 use lattice_key::{NodeKey, SecretKeyBytes};
 use lattice_quic::{ConfigError, QuicConfig, QuicTransport};
-use lattice_transport::{Conn, PathKind, RecvStream, SendStream, Transport, TransportError};
+use lattice_transport::{
+    CloseReason, Conn, PathKind, RecvStream, SendStream, Transport, TransportError,
+};
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -183,4 +185,39 @@ async fn direct_lan_binds_any_address_and_reports_both_node_ids() {
     let conn = client.connect(key(1).node_id()).await.unwrap();
     assert_eq!(conn.remote_id(), key(1).node_id());
     assert_eq!(accept.await.unwrap().unwrap(), key(2).node_id());
+}
+
+/// The deck's first steps on a link: open the control stream, say hello, wait for an answer.
+async fn first_exchange(conn: &impl Conn) -> Result<Option<usize>, TransportError> {
+    let (mut tx, mut rx) = conn.open_bi().await?;
+    tx.write_all(b"hello").await?;
+    let mut buf = [0u8; 64];
+    rx.read(&mut buf).await
+}
+
+#[tokio::test]
+async fn a_refused_peer_fails_with_refused_instead_of_hanging() {
+    let worker = node(1).await;
+    let deck = node(2).await;
+    let worker_id = worker.local_id();
+    deck.add_peer(worker_id, worker.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+        let (_peer, conn) = worker.accept().await.unwrap();
+        conn.close(CloseReason::Refused);
+        drop(conn);
+        // The transport stays up, as in `latticed`: it must not keep the refused peer open.
+        worker
+    });
+
+    let conn = tokio::time::timeout(STEP, deck.connect(worker_id))
+        .await
+        .unwrap()
+        .unwrap();
+    let _worker = tokio::time::timeout(STEP, server).await.unwrap().unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(2), first_exchange(&conn))
+        .await
+        .expect("the refusal arrives within 2 s");
+    assert_eq!(got, Err(TransportError::Refused));
+    assert_eq!(TransportError::Refused.code(), "transport.refused");
 }

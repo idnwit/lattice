@@ -24,6 +24,7 @@
 //! # Key items
 //!
 //! - [`Transport`], [`Conn`], [`SendStream`], [`RecvStream`]: the L1 boundary.
+//! - [`CloseReason`]: why a node closes a connection; the peer sees [`TransportError::Refused`].
 //! - [`PathInfo`], [`PathKind`]: what the status bar shows.
 //! - [`PathSelector`]: relay-first, then direct, with 2 s silence fallback.
 //! - [`HomeRelay`]: where a node registers.
@@ -34,7 +35,7 @@
 mod conn;
 mod path;
 
-pub use conn::{Conn, HomeRelay, RecvStream, SendStream, Transport, TransportError};
+pub use conn::{CloseReason, Conn, HomeRelay, RecvStream, SendStream, Transport, TransportError};
 pub use path::{
     DIRECT_SILENCE_FALLBACK, DUPLICATE_WINDOW, PathEvent, PathInfo, PathKind, PathSelector,
 };

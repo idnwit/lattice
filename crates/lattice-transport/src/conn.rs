@@ -18,6 +18,10 @@ pub enum TransportError {
     /// The connection or stream closed.
     #[error("closed")]
     Closed,
+    /// The peer closed the connection because it does not allow this node
+    /// ([`CloseReason::Refused`]).
+    #[error("refused by peer")]
+    Refused,
     /// A datagram exceeds the path limit.
     #[error("datagram too large")]
     DatagramTooLarge,
@@ -33,10 +37,19 @@ impl TransportError {
             Self::Unreachable => "transport.unreachable",
             Self::IdentityMismatch => "transport.identity_mismatch",
             Self::Closed => "transport.closed",
+            Self::Refused => "transport.refused",
             Self::DatagramTooLarge => "transport.datagram_too_large",
             Self::Io(_) => "transport.io",
         }
     }
+}
+
+/// Why a node closes a connection on purpose. The peer sees it as a [`TransportError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseReason {
+    /// The peer is not allowed here (specs/01-pairing.md, rule 12). The peer's streams fail
+    /// with [`TransportError::Refused`].
+    Refused,
 }
 
 /// A node's home relay: where it registers and where peers reach it first.
@@ -113,6 +126,10 @@ pub trait Conn: Send + Sync {
 
     /// Verified id of the peer.
     fn remote_id(&self) -> NodeId;
+
+    /// Closes the connection now, for every handle to it, and tells the peer `reason`.
+    /// Dropping a `Conn` does not close it: the transport may keep it for reuse (D4).
+    fn close(&self, reason: CloseReason);
 }
 
 /// Write half of a reliable stream.

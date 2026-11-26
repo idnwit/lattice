@@ -3,7 +3,7 @@
 use super::*;
 use bytes::Bytes;
 use lattice_key::{NodeKey, SecretKeyBytes};
-use lattice_transport::{PathInfo, PathKind};
+use lattice_transport::{CloseReason, PathInfo, PathKind};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
@@ -127,6 +127,10 @@ impl Conn for Accepted {
 
     fn remote_id(&self) -> NodeId {
         self.0
+    }
+
+    fn close(&self, _reason: CloseReason) {
+        // Not observed by these tests.
     }
 }
 
