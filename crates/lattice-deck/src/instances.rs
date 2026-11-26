@@ -77,11 +77,22 @@ impl Instances {
         self.shared.link.set(state);
     }
 
-    /// A link opened: subscribe to `worker/apps` and send the closes that waited.
+    /// A link opened: subscribe to `worker/apps`, resubscribe each viewer at the version it
+    /// holds (specs/02-connectivity.md, Reconnect rule 11), and send the closes that waited.
     pub(crate) async fn linked(&mut self, link: WorkerLink<QuicConn>) -> Result<(), String> {
         self.link = Some(link);
         let apps = stream("worker/apps")?;
         self.link()?.subscribe(apps).await.map_err(code)?;
+        let held: Vec<(u64, Option<u64>)> = self
+            .viewers
+            .iter()
+            .filter(|(_, v)| !v.is_dead())
+            .map(|(iid, v)| (*iid, v.version()))
+            .collect();
+        for (iid, version) in held {
+            let s = stream(&format!("inst/{iid}/state"))?;
+            self.link()?.subscribe_at(s, version).await.map_err(code)?;
+        }
         for iid in std::mem::take(&mut self.closes) {
             let close = AppsAction::Close {
                 iid: InstanceId::from_raw(iid),

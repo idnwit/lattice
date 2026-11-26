@@ -33,6 +33,7 @@
 //! - [`PaneId`]: `<tab>.<pane>` ids (`1.2`).
 //! - [`Status`]: state glyph values and busiest-child priority.
 //! - [`PendingInvite`], [`accept_pair`]: the deck side of pairing (specs/01-pairing.md, D47).
+//! - [`Backoff`]: waits between dials of a lost worker (specs/02-connectivity.md, Reconnect).
 //! - [`DeckFiles`], [`WorkerList`]: the deck key and the paired workers in `<data dir>/deck`.
 
 #![deny(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
@@ -42,6 +43,7 @@ mod files;
 mod link;
 mod model;
 mod pair;
+mod reconnect;
 mod status;
 mod wire;
 mod workers;
@@ -53,6 +55,7 @@ pub use lattice_sync_proto::INVITE_TTL_SECS;
 pub use link::{DeckError, DeckHost, WorkerLink};
 pub use model::{DeckState, PaneId, PaneIdError, WorkerEntry};
 pub use pair::{PairDeny, PairStep, PairedWorker, PendingInvite, accept_pair};
+pub use reconnect::{Backoff, CONNECT_TIMEOUT, RECONNECT_FIRST, RECONNECT_MAX};
 pub use status::Status;
 pub use wire::StateUpdate;
 pub use workers::{WorkerList, monogram};

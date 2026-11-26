@@ -14,7 +14,7 @@ pub(crate) enum LinkState {
     Connecting { worker: String },
     /// Linked to `worker` over `path`.
     Up { worker: String, path: PathInfo },
-    /// The link to `worker` ended or did not open; `code` says why.
+    /// The link to `worker` ended or did not open; `code` says why. The deck dials again.
     Lost { worker: String, code: String },
 }
 
@@ -38,7 +38,7 @@ impl LinkState {
             Self::NoWorker => "no worker".to_owned(),
             Self::Connecting { worker } => format!("{worker} · connecting"),
             Self::Up { worker, path } => format!("{worker} · {path}"),
-            Self::Lost { worker, code } => format!("{worker} · {code}"),
+            Self::Lost { worker, code } => format!("{worker} · reconnecting · {code}"),
         }
     }
 }
@@ -110,7 +110,11 @@ mod tests {
                 "build-01 · direct · 3ms",
             ),
             (up(PathKind::Relay), Status::Relay, "build-01 · relay · 3ms"),
-            (lost, Status::Error, "build-01 · transport.closed"),
+            (
+                lost,
+                Status::Error,
+                "build-01 · reconnecting · transport.closed",
+            ),
         ];
         for (state, status, text) in cases {
             assert_eq!(
