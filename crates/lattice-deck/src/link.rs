@@ -5,12 +5,16 @@
 //! dials with the deck key from `deck/node.key`, from a socket on `0.0.0.0:0`, and shows its
 //! state in the `link` signal ([`LinkState`]). `Cmd::Worker` switches it to a newly paired
 //! worker.
+//!
+//! A link that ends is dialed again (specs/02-connectivity.md, Reconnect): waits from
+//! [`Backoff`], each dial bounded by [`CONNECT_TIMEOUT`] on the NSH timer. The viewers stay;
+//! a new link resubscribes each at the version it holds ([`Instances::linked`]).
 
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use lattice_app::view::ViewTree;
-use lattice_deck_core::{DeckFiles, DeckHost, PairedWorker, WorkerLink};
+use lattice_deck_core::{Backoff, CONNECT_TIMEOUT, DeckFiles, DeckHost, PairedWorker, WorkerLink};
 use lattice_quic::{QuicConfig, QuicConn, QuicTransport};
 use nsh_core::prelude::*;
 use tokio::sync::mpsc;
@@ -77,6 +81,7 @@ async fn run(
     mut worker: Option<PairedWorker>,
     mut cmds: mpsc::UnboundedReceiver<Cmd>,
 ) {
+    let mut backoff = Backoff::default();
     loop {
         let Some(target) = worker.clone() else {
             inst.set_link(LinkState::NoWorker);
@@ -87,36 +92,63 @@ async fn run(
             continue;
         };
         let name = target.name.clone();
-        inst.set_link(LinkState::Connecting {
-            worker: name.clone(),
-        });
+        // While retrying, the rail keeps showing the loss (Link states: lost).
+        if backoff == Backoff::default() {
+            inst.set_link(LinkState::Connecting {
+                worker: name.clone(),
+            });
+        }
         let mut next = dial(&mut inst, files.as_ref(), &target, &mut cmds).await;
         if let Next::Linked(link) = next {
-            let path = link.path();
-            next = match inst.linked(link).await {
-                Ok(()) => {
-                    inst.set_link(LinkState::Up {
-                        worker: name.clone(),
-                        path,
-                    });
-                    serve(&mut inst, &mut cmds).await
-                }
-                Err(code) => Next::Lost(code),
-            };
+            next = session(&mut inst, &mut cmds, link, &name, &mut backoff).await;
         }
         if let Next::Lost(code) = next {
-            tracing::info!(code, "worker link lost");
+            tracing::info!(code, "worker link lost; dialing again");
             inst.unlinked();
             inst.set_link(LinkState::Lost { worker: name, code });
-            next = wait(&mut inst, &mut cmds).await;
+            next = pause(&mut inst, &mut cmds, backoff.next_delay()).await;
         }
         match next {
             Next::Switch(w) => {
                 inst.forget();
+                backoff.reset();
                 worker = Some(w);
             }
-            Next::Quit | Next::Linked(_) | Next::Lost(_) => return,
+            Next::Lost(_) => {}
+            Next::Quit | Next::Linked(_) => return,
         }
+    }
+}
+
+/// A link opened: resubscribe, then serve it until it ends.
+async fn session(
+    inst: &mut Instances,
+    cmds: &mut mpsc::UnboundedReceiver<Cmd>,
+    link: WorkerLink<QuicConn>,
+    name: &str,
+    backoff: &mut Backoff,
+) -> Next {
+    let path = link.path();
+    if let Err(code) = inst.linked(link).await {
+        return Next::Lost(code);
+    }
+    backoff.reset();
+    inst.set_link(LinkState::Up {
+        worker: name.to_owned(),
+        path,
+    });
+    serve(inst, cmds).await
+}
+
+/// Waits `delay` before the next dial while serving commands offline. `Lost` when it is time.
+async fn pause(
+    inst: &mut Instances,
+    cmds: &mut mpsc::UnboundedReceiver<Cmd>,
+    delay: std::time::Duration,
+) -> Next {
+    tokio::select! {
+        next = wait(inst, cmds) => next,
+        () = timer(delay) => Next::Lost(String::new()),
     }
 }
 
@@ -141,9 +173,12 @@ async fn dial(
 ) -> Next {
     let open = connect(files, worker);
     tokio::pin!(open);
+    let deadline = timer(CONNECT_TIMEOUT);
+    tokio::pin!(deadline);
     loop {
         tokio::select! {
             opened = &mut open => return opened.map_or_else(Next::Lost, Next::Linked),
+            () = &mut deadline => return Next::Lost("deck.connect_timeout".to_owned()),
             cmd = cmds.recv() => match cmd {
                 None => return Next::Quit,
                 Some(Cmd::Worker(w)) => return Next::Switch(w),

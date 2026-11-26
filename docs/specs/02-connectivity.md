@@ -19,13 +19,25 @@ The user's devices sync settings and layouts with each other directly. No server
 5. Lost connection (e.g. mobile app backgrounded) → reconnect and resume every stream from its cursor. Workers keep all state.
 6. Link type and RTT are always visible: worker card, pane header, status bar (`direct · 18ms`, `relay · 64ms`).
 
+### Reconnect (M1, direct only)
+
+7. When a link ends, the deck dials the worker again. Panes and their viewers stay.
+8. Waits between dials: `RECONNECT_FIRST` = 500 ms, doubled after each failed dial, capped at `RECONNECT_MAX` = 8 s (proposed).
+9. A dial that does not open a link within `CONNECT_TIMEOUT` = 5 s (proposed) counts as failed.
+10. A link that opens resets the wait to `RECONNECT_FIRST`.
+11. After a link opens, the deck subscribes to `worker/apps` and to each viewer's stream at the version it holds. The worker sends only what is missing (architecture/06-apps.md, Sync to viewers).
+12. A pane action sent while the link is down fails: `create` with `deck.offline`; input is dropped.
+13. The rail and the status bar show the active worker's link state (Link states below).
+
+TBD: detecting a dead link takes the QUIC idle timeout (30 s, lattice-quic). Add an application-level heartbeat?
+
 ### Link states (deck)
 
 | State | Glyph | Status bar text |
 |---|---|---|
 | connecting | ring (idle) | `build-01 · connecting` |
 | up | dot (direct) or ring (relay) | `build-01 · direct · 3ms` |
-| lost | square (error) | `build-01 · <error code>` |
+| lost | square (error) | `build-01 · reconnecting · <error code>` |
 | no worker | dim ring (offline) | `no worker` |
 
 A paired worker that is not the active one shows offline (M1 links one worker).
