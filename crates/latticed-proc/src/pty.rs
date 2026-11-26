@@ -11,6 +11,9 @@ use rustix::fs::{Mode, OFlags};
 use rustix::pty::OpenptFlags;
 use rustix::termios::Winsize;
 
+/// Prefix of the daemons' own settings; a child never inherits them (04-worker.md, Child env).
+const DAEMON_VAR_PREFIX: &[u8] = b"LATTICE_";
+
 /// A child running on a PTY master we own.
 #[derive(Debug)]
 pub(crate) struct Child {
@@ -21,7 +24,8 @@ pub(crate) struct Child {
 /// Opens a PTY pair, forks, and execs `spec` on the slave side.
 ///
 /// The child gets a new session with the slave as controlling tty and as fds
-/// 0/1/2. Its env is the daemon's env with `spec`'s vars merged on top.
+/// 0/1/2. Its env is the daemon's env without its `LATTICE_*` vars, with `spec`'s
+/// vars on top (04-worker.md, Child env rules 1-2).
 pub(crate) fn spawn(spec: &SpawnSpec) -> std::io::Result<Child> {
     let master = rustix::pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
     rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC)?;
@@ -38,6 +42,11 @@ pub(crate) fn spawn(spec: &SpawnSpec) -> std::io::Result<Child> {
         .split_first()
         .ok_or(std::io::ErrorKind::InvalidInput)?;
     let mut cmd = Command::new(OsStr::from_bytes(program));
+    for (name, _) in std::env::vars_os() {
+        if name.as_bytes().starts_with(DAEMON_VAR_PREFIX) {
+            cmd.env_remove(name);
+        }
+    }
     cmd.args(args.iter().map(|a| OsStr::from_bytes(a)))
         .envs(
             spec.env()

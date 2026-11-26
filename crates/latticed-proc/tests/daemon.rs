@@ -190,6 +190,27 @@ fn shell_output_then_exit_code_then_drop() {
 }
 
 #[test]
+fn a_child_gets_no_daemon_var_but_keeps_its_spawn_vars() {
+    // 04-worker.md, Child env rules 1-2. The daemon runs with `LATTICE_PROC_SOCK` set.
+    let (_daemon, mut conn) = start("env");
+    let j = jid(1);
+    open_and_spawn(&mut conn, &j, &["/bin/sh", "-c", "env; echo env-done"]);
+    conn.send(&Request::Subscribe {
+        journal: j,
+        from_off: Offset::from_raw(0),
+    });
+    let (out, _) = conn.until_exit();
+    let out = String::from_utf8_lossy(&out);
+    assert!(out.contains("env-done"), "out={out}");
+    let lattice: Vec<&str> = out
+        .lines()
+        .filter(|l| l.starts_with("LATTICE_"))
+        .map(str::trim_end)
+        .collect();
+    assert_eq!(lattice, ["LATTICE_TEST=1"], "out={out}");
+}
+
+#[test]
 fn cat_echoes_input_and_drop_is_busy_while_it_lives() {
     let (_daemon, mut conn) = start("cat");
     let j = jid(2);

@@ -12,7 +12,7 @@ use crate::delta_queue::{BootEpoch, DeltaQueue};
 use crate::runner::{DynRunner, Input, Mode, Step};
 use lattice_package::SpawnTemplate;
 
-use crate::spawn::{DEFAULT_SIZE, resolve};
+use crate::spawn::{DEFAULT_SIZE, TERMINAL_ENV, resolve};
 
 /// `SIGHUP`: sent by `close` and `finish` (06-apps.md, Instances rule 5).
 pub(super) const SIGHUP: i32 = 1;
@@ -190,12 +190,15 @@ impl Instance {
         let (argv, cwd) = resolve(t, cwd);
         // 04-worker.md, Structured events: LATTICE_PROC_ID is assigned by `latticed-proc`
         // and unknown before `Spawned`, so only LATTICE_INSTANCE_ID is set (TBD in 04).
+        let iid = self.iid.to_string();
+        let env = TERMINAL_ENV
+            .into_iter()
+            .chain([("LATTICE_INSTANCE_ID", iid.as_str())]);
         let spec = SpawnSpec::try_new(self.journal.clone(), argv, cwd, self.size.0, self.size.1)
-            .and_then(|s| {
-                s.with_env(
-                    b"LATTICE_INSTANCE_ID".to_vec(),
-                    self.iid.to_string().into_bytes(),
-                )
+            .and_then(|spec| {
+                env.into_iter().try_fold(spec, |spec, (k, v)| {
+                    spec.with_env(k.as_bytes().to_vec(), v.as_bytes().to_vec())
+                })
             });
         match spec {
             Ok(spec) => {
