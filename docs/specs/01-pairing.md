@@ -92,6 +92,19 @@ Runtime files stay in `$TMPDIR/lattice` (`proc.sock`, `worker.addr`).
 
 Design system: patterns.md › Add worker; components.md › Invite command.
 M1 deck: one active worker, the most recently paired one. TBD: switch the active worker from the rail.
+
+Add worker dialog (desktop deck):
+
+1. The rail shows one entry per paired worker: its monogram and its link state glyph (02-connectivity.md, Link states).
+2. `+` opens the dialog. It makes an invite unless one is still waiting; then it shows that one again.
+3. Close and `Escape` hide the dialog. The invite stays open until it pairs or expires.
+4. The status is `pairing…` while a worker's callback is served, and back to `waiting for worker…` if that callback does not pair.
+5. The deck stops serving the invite at its expiry (`INVITE_TTL_SECS`) and shows `expired`.
+6. `New invite` shows once the invite expired or failed. It replaces the invite.
+7. On `paired · <name>` the deck links to that worker: it is the most recently paired one.
+8. With no paired worker, the workspace shows "No worker yet." and `Add worker`, which opens the dialog.
+
+TBD: canvas artboard for the deck with no paired worker (rule 8).
 TBD: the canvas and the simulator still show the worker-shows-code flow (`lattice pair`, Scan QR / Enter code). Update both to the invite flow (D47).
 TBD: iOS adds a worker the same way (copy the command, run it on the worker); the Mobile "Pair worker" artboard changes with it.
 

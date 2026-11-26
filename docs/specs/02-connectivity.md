@@ -19,6 +19,18 @@ The user's devices sync settings and layouts with each other directly. No server
 5. Lost connection (e.g. mobile app backgrounded) → reconnect and resume every stream from its cursor. Workers keep all state.
 6. Link type and RTT are always visible: worker card, pane header, status bar (`direct · 18ms`, `relay · 64ms`).
 
+### Link states (deck)
+
+| State | Glyph | Status bar text |
+|---|---|---|
+| connecting | ring (idle) | `build-01 · connecting` |
+| up | dot (direct) or ring (relay) | `build-01 · direct · 3ms` |
+| lost | square (error) | `build-01 · <error code>` |
+| no worker | dim ring (offline) | `no worker` |
+
+A paired worker that is not the active one shows offline (M1 links one worker).
+TBD: `connecting` uses the `idle` ring (proposed); the canvas has no connecting state.
+
 ## Worker states
 
 | State | Glyph | Meaning |

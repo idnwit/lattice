@@ -80,6 +80,7 @@ impl Panel {
 #[derive(Clone)]
 pub struct Shell {
     pub(crate) header: Option<Render>,
+    pub(crate) rail: Option<Render>,
     pub(crate) left: Option<Panel>,
     pub(crate) workspace: Render,
     pub(crate) right: Option<Panel>,
@@ -91,6 +92,7 @@ impl Shell {
     pub fn new(workspace: impl Fn() -> View + 'static) -> Self {
         Self {
             header: None,
+            rail: None,
             left: None,
             workspace: Rc::new(workspace),
             right: None,
@@ -101,6 +103,13 @@ impl Shell {
     /// A bar above everything on desktop (the title bar). Not shown on mobile.
     pub fn header(mut self, render: impl Fn() -> View + 'static) -> Self {
         self.header = Some(Rc::new(render));
+        self
+    }
+
+    /// The worker rail: the leftmost column on desktop, always shown. Not shown on mobile
+    /// (the sessions drawer lists workers there).
+    pub fn rail(mut self, render: impl Fn() -> View + 'static) -> Self {
+        self.rail = Some(Rc::new(render));
         self
     }
 

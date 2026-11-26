@@ -205,9 +205,21 @@ async fn a_good_secret_pairs_with_the_tls_node_id_after_a_bad_one() {
         saved.push(w.clone());
         Ok(())
     };
-    let worker = accept_pair(&transport, &mut p, "minh-mbp", || NOW, save)
-        .await
-        .unwrap();
+    let mut steps = Vec::new();
+    let worker = accept_pair(
+        &transport,
+        &mut p,
+        "minh-mbp",
+        || NOW,
+        save,
+        |s| {
+            steps.push(s);
+        },
+    )
+    .await
+    .unwrap();
+    let want = [PairStep::Serving, PairStep::Waiting, PairStep::Serving];
+    assert_eq!(steps, want, "the bad callback goes back to waiting");
     assert_eq!(worker.id, id(2), "the id comes from the connection");
     assert_eq!(
         (worker.name.as_str(), worker.addr.port()),
@@ -232,7 +244,7 @@ async fn an_expired_invite_denies_and_stops() {
     let (conn, task) = dial(id(2), secret);
     let transport = Workers(Mutex::new(vec![conn]));
     let late = NOW + INVITE_TTL_SECS;
-    let res = accept_pair(&transport, &mut p, "deck", || late, |_| Ok(())).await;
+    let res = accept_pair(&transport, &mut p, "deck", || late, |_| Ok(()), |_| {}).await;
     assert_eq!(res, Err(DeckError::Remote("pair.expired".to_owned())));
     let denied = Message::PairDenied {
         code: "pair.expired".to_owned(),
@@ -247,7 +259,7 @@ async fn a_failed_save_denies_the_worker() {
     let (conn, task) = dial(id(2), secret);
     let transport = Workers(Mutex::new(vec![conn]));
     let fail = |_: &PairedWorker| Err("io".to_owned());
-    let res = accept_pair(&transport, &mut p, "deck", || NOW, fail).await;
+    let res = accept_pair(&transport, &mut p, "deck", || NOW, fail, |_| {}).await;
     assert_eq!(res, Err(DeckError::Remote("io".to_owned())));
     let denied = Message::PairDenied {
         code: "pair.save_failed".to_owned(),

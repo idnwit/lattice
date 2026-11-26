@@ -20,7 +20,11 @@ pub(crate) fn sessions(ws: &Workspace, desk: Desk) -> View {
     view()
         .flex_1()
         .flex_row()
-        .child(worker_rail(&ws.rail, move || desk.verdict.get().is_none()))
+        .child(worker_rail(
+            &ws.rail,
+            move || desk.verdict.get().is_none(),
+            || {},
+        ))
         .child(worker_panel(
             &ws.worker,
             desk.session,

@@ -18,6 +18,7 @@ pub(crate) fn desktop_layout(shell: &Shell, panels: Panels) -> View {
                 .flex_1()
                 .flex_row()
                 .min_h(px(0.0))
+                .when_some(shell.rail.clone(), |v, r| v.child(r()))
                 .when_some(shell.left.clone(), |v, p| {
                     v.child(side(p, panels.left, Edge::Left))
                 })

@@ -17,6 +17,7 @@ lattice-package.workspace = true
 lattice-quic.workspace = true
 lattice-state.workspace = true
 lattice-sync-proto.workspace = true
+lattice-transport.workspace = true
 lattice-wasm.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true

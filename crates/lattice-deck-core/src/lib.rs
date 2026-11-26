@@ -52,7 +52,7 @@ pub use lattice_app::{Replica, ReplicaEvent};
 pub use lattice_sync_proto::INVITE_TTL_SECS;
 pub use link::{DeckError, DeckHost, WorkerLink};
 pub use model::{DeckState, PaneId, PaneIdError, WorkerEntry};
-pub use pair::{PairDeny, PairedWorker, PendingInvite, accept_pair};
+pub use pair::{PairDeny, PairStep, PairedWorker, PendingInvite, accept_pair};
 pub use status::Status;
 pub use wire::StateUpdate;
 pub use workers::{WorkerList, monogram};

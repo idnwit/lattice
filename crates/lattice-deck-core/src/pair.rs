@@ -99,6 +99,15 @@ impl PendingInvite {
     }
 }
 
+/// Progress of [`accept_pair`], for the status line (specs/01-pairing.md, UI rule 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairStep {
+    /// A worker connected: its callback is being served (`pairing…`).
+    Serving,
+    /// That callback did not pair; the invite waits for the next (`waiting for worker…`).
+    Waiting,
+}
+
 /// A worker the deck paired with: its NodeId comes from TLS, never from a message (rule 6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairedWorker {
@@ -115,6 +124,8 @@ pub struct PairedWorker {
 /// For each connection: read `PairRequest`, [`PendingInvite::check`] it at `now()`, call
 /// `save` before answering `PairOk{deck_name}` (rule 7), then wait for the worker to finish
 /// its stream (rule 9). A bad secret gets `PairDenied` and the next connection is served.
+/// `on_step` hears each connection start ([`PairStep::Serving`]) and each one that did not
+/// pair ([`PairStep::Waiting`]).
 ///
 /// # Errors
 ///
@@ -127,15 +138,18 @@ pub async fn accept_pair<T: Transport>(
     deck_name: &str,
     now: impl Fn() -> u64,
     mut save: impl FnMut(&PairedWorker) -> Result<(), String>,
+    mut on_step: impl FnMut(PairStep),
 ) -> Result<PairedWorker, DeckError> {
     loop {
         let (peer, conn) = transport.accept().await?;
+        on_step(PairStep::Serving);
         match serve(&conn, peer, pending, deck_name, &now, &mut save).await {
             Ok(Some(worker)) => return Ok(worker),
-            Ok(None) => {}
+            Ok(None) => on_step(PairStep::Waiting),
             Err(Served::Fatal(e)) => return Err(e),
             Err(Served::Dropped(code)) => {
                 tracing::debug!(%peer, code, "pairing connection dropped");
+                on_step(PairStep::Waiting);
             }
         }
         if pending.is_used() || pending.invite.expired_at(now()) {

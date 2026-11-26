@@ -166,7 +166,12 @@ pub(crate) fn worker_card(worker: &Worker) -> View {
 /// Worker rail: monograms with link glyphs, `+`, and the `⌘1–9` hint.
 ///
 /// `waiting` shows the waiting badge on the selected and the all-workers entries.
-pub fn worker_rail(items: &[RailItem], waiting: impl IntoReactive<bool>) -> View {
+/// `on_add` hears `+` (Add worker, patterns.md).
+pub fn worker_rail(
+    items: &[RailItem],
+    waiting: impl IntoReactive<bool>,
+    on_add: impl Fn() + 'static,
+) -> View {
     let waiting = waiting.into_reactive();
     view()
         .flex_none()
@@ -183,7 +188,10 @@ pub fn worker_rail(items: &[RailItem], waiting: impl IntoReactive<bool>) -> View
         .child(
             rail_button(body("+", color::FG_MUTED))
                 .border_dashed()
-                .border_color(color::LINE_STRONG),
+                .border_color(color::LINE_STRONG)
+                .role(AccessibilityRole::Button)
+                .label("Add worker")
+                .on_press(move |_: &PressEvent| on_add()),
         )
         .child(view().flex_1())
         .child(badge("⌘1–9", color::FG_DIM))
@@ -218,6 +226,8 @@ fn rail_item(item: &RailItem, waiting: Reactive<bool>) -> View {
     rail_button(mono)
         .relative()
         .role(AccessibilityRole::Tab)
+        .label(item.mono.clone())
+        .accessibility_state(selected_state(item.selected))
         .bg(bg)
         .border_color(border)
         .when_some(item.status, |b, s| {
