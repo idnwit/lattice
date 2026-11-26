@@ -10,8 +10,8 @@ on:
 # Events created with GITHUB_TOKEN do not start other workflows, except
 # workflow_dispatch. After opening/updating the release PR, this workflow
 # dispatches the real required checks (CI, PR title, commits) on the PR branch.
-# Tags pushed by the release job also do not start workflows; build release
-# artifacts inside the release job (`releases_created`) if needed.
+# Tags and releases made by the release job also do not start workflows, so the
+# job dispatches release-artifacts.yml for each new tag.
 
 jobs:
   release-plz-release:
@@ -21,17 +21,30 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: release-plz/action@v0.5
+      - id: release-plz
+        uses: release-plz/action@v0.5
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish the release artifacts
+        if: steps.release-plz.outputs.releases_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          # One workspace version, so usually one tag; dedupe in case several crates list it.
+          for tag in $(jq -r '.[].tag' <<<"$RELEASES" | sort -u); do
+            gh workflow run release-artifacts.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$tag"
+            echo "Dispatched release artifacts for $tag."
+          done
 
   release-plz-pr:
     name: Release-plz PR

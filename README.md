@@ -43,6 +43,29 @@ The same sessions on a phone: terminal with a key bar, and the agent view with o
 
 Design sources of truth: the [design canvas](https://claude.ai/artifact/XgswugNGzHbdYaWjpYDDhe) and the [simulator](https://claude.ai/artifact/5rwS5TZeyK6fziD1YRM8ak).
 
+## Install
+
+Prebuilt from GitHub releases: `latest` is the newest `vX.Y.Z`, `dev` is a rolling build of `main`. The script picks the build for the machine it runs on and checks its sha256.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/idnwit/lattice/main/install.sh | sh -s -- worker
+```
+
+| Component | Installs | Platforms |
+|---|---|---|
+| `worker` (default) | `latticed`, `latticed-proc`, `lattice` into `~/.local/bin` | Linux x86_64 and aarch64 (static musl), macOS x86_64 and arm64 |
+| `relay` | `lattice-relay` into `~/.local/bin` | same |
+| `deck` | `Lattice.app` into `~/Applications` | macOS arm64 |
+| `all` | all of the above that the platform has | |
+
+Options: `--version dev|latest|vX.Y.Z`, `--bin-dir DIR`, `--app-dir DIR`, `--dry-run`. The relay also ships as an image:
+
+```sh
+docker run -d -p 7400:7400/udp -v lattice-relay:/data ghcr.io/idnwit/lattice-relay:latest
+```
+
+Builds come from `.github/workflows/release-artifacts.yml`.
+
 ## Try the M1 PoC (macOS)
 
 A local worker and the deck, loopback only (experiment mode):

@@ -1,0 +1,232 @@
+name: release artifacts
+
+# Builds the binaries, the macOS deck app and the relay image, then publishes them.
+#
+# - push to main: the rolling `dev` prerelease and ghcr.io/<owner>/lattice-relay:dev.
+# - release published (v*), or a dispatch with `tag`: uploads to that release and tags
+#   the image `X.Y.Z` and `latest`. release-plz creates releases with GITHUB_TOKEN, which
+#   fires no `release` event, so release-plz.yml dispatches this workflow per tag.
+# - dispatch without `tag`: builds everything, publishes nothing (a dry run from a branch).
+#
+# Assets: lattice-{worker,relay}-<target>.tar.gz and lattice-deck-<target>.zip, each with a
+# `.sha256`. install.sh picks the one for the machine it runs on.
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish to (vX.Y.Z). Empty: build only."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-artifacts-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    name: plan
+    # Versioned releases only: the rolling `dev` prerelease is made by this workflow itself.
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          case "$EVENT" in
+            push) tag=dev; ref="$SHA"; publish=true ;;
+            release) tag="$RELEASE_TAG"; ref="$RELEASE_TAG"; publish=true ;;
+            *)
+              if [ -n "$INPUT_TAG" ]; then tag="$INPUT_TAG"; ref="$INPUT_TAG"; publish=true
+              else tag=dev; ref="$SHA"; publish=false; fi ;;
+          esac
+          case "$tag" in dev|v[0-9]*) ;; *) echo "bad tag: $tag"; exit 1 ;; esac
+          { echo "tag=$tag"; echo "ref=$ref"; echo "publish=$publish"; } >> "$GITHUB_OUTPUT"
+          echo "tag=$tag ref=$ref publish=$publish"
+
+  binaries:
+    name: binaries ${{ matrix.target }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Static musl: one Linux build runs on every distro.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      # rust-toolchain.toml pins the toolchain; rustup installs it on first use.
+      - name: Add the target
+        run: rustup target add "${{ matrix.target }}"
+      - name: musl C toolchain
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          echo "CC_$(echo '${{ matrix.target }}' | tr '-' '_')=musl-gcc" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: |
+          export RUSTFLAGS="--remap-path-prefix=${HOME}=~ --remap-path-prefix=$(pwd)=."
+          cargo build --release --locked --target "${{ matrix.target }}" \
+            -p latticed -p latticed-proc -p lattice -p lattice-relay
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          out="target/${TARGET}/release"
+          mkdir -p dist
+          tar -C "$out" -czf "dist/lattice-worker-${TARGET}.tar.gz" latticed latticed-proc lattice
+          tar -C "$out" -czf "dist/lattice-relay-${TARGET}.tar.gz" lattice-relay
+          scripts/sha256-files.sh dist/*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*
+
+  deck:
+    name: deck aarch64-apple-darwin
+    needs: plan
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: deck-aarch64-apple-darwin
+      # NSH 0.7 (docs/architecture/09-platform-l1.md, run table).
+      - name: Install nsh
+        run: |
+          brew install longbridge/tap/nsh
+          nsh --version
+      - name: Package Lattice.app
+        working-directory: crates/lattice-deck
+        run: nsh package --target macos -o ../../dist-app
+      - name: Zip
+        run: |
+          mkdir -p dist
+          ditto -c -k --keepParent dist-app/Lattice.app dist/lattice-deck-aarch64-apple-darwin.zip
+          scripts/sha256-files.sh dist/*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deck-aarch64-apple-darwin
+          path: dist/*
+
+  publish:
+    name: publish ${{ needs.plan.outputs.tag }}
+    needs: [plan, binaries, deck]
+    # A missing deck build (macOS runner down) must not block the Linux and relay assets.
+    if: ${{ !cancelled() && needs.plan.outputs.publish == 'true' && needs.binaries.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          REF: ${{ needs.plan.outputs.ref }}
+        run: |
+          cp install.sh dist/
+          if [ "$TAG" = dev ]; then
+            gh release delete dev --cleanup-tag --yes || true
+            gh release create dev dist/* \
+              --target "$REF" \
+              --prerelease \
+              --title "dev (rolling)" \
+              --notes "Rolling build of \`main\` at commit ${REF}. Not a stable release."
+          else
+            gh release upload "$TAG" dist/* --clobber
+          fi
+
+  relay-image:
+    name: relay image ${{ needs.plan.outputs.tag }}
+    needs: [plan, binaries]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*-linux-musl
+          path: dist
+          merge-multiple: true
+      - name: Image context
+        run: |
+          ctx=docker-ctx
+          mkdir -p "$ctx/amd64" "$ctx/arm64"
+          cp -R docker/data "$ctx/data"
+          tar -xzf dist/lattice-relay-x86_64-unknown-linux-musl.tar.gz -C "$ctx/amd64"
+          tar -xzf dist/lattice-relay-aarch64-unknown-linux-musl.tar.gz -C "$ctx/arm64"
+      - name: Tags
+        id: tags
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          REF: ${{ needs.plan.outputs.ref }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          image="ghcr.io/$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')/lattice-relay"
+          if [ "$TAG" = dev ]; then
+            tags="${image}:dev,${image}:sha-$(echo "$REF" | cut -c1-12)"
+          else
+            tags="${image}:${TAG#v},${image}:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker-ctx
+          file: docker/relay.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Lattice public UDP relay: forwards ciphertext, never decrypts
