@@ -7,40 +7,65 @@
 //! `$TMPDIR/lattice/packages/<hash>.lpkg` so restore finds it after a restart. A restart never kills processes: they live in `latticed-proc`, and
 //! runners rebuild from its journals.
 //!
-//! Experiment mode (M1, before pairing): QUIC direct on a loopback address only.
-//! Any deck on this machine may connect. The worker writes `<node id hex>@<addr>`
-//! to `$TMPDIR/lattice/worker.addr` so a local deck can find it.
+//! M1 (direct only): QUIC on `0.0.0.0:7441`; only decks in the allowlist `worker/decks`
+//! may connect (specs/01-pairing.md, rules 12–14). The worker writes `<node id>@<addr>` to
+//! `$TMPDIR/lattice/worker.addr`, so `latticed add-deck` finds the listen port.
+//!
+//! `latticed add-deck <invite>` (what `lattice add-deck` runs): the worker side of pairing.
+//! It dials the deck with the worker key and adds the deck to the allowlist.
+//!
+//! Files (specs/01-pairing.md, Files): `<data dir>/worker/{node.key, decks, packages/}`.
+
+// Binaries may print (.rules/engineering.md, Lints).
+#![allow(clippy::print_stdout)]
 
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use lattice_app::PackageHash;
 use lattice_key::{NodeKey, SecretKeyBytes};
 use lattice_package::Package;
 use lattice_quic::{QuicConfig, QuicTransport};
 use lattice_wasm::{Limits, WasmApp};
-use lattice_worker::{AppsRunner, Installed, PackageLoader, PeerPolicy, ProcClient, WorkerHost};
+use lattice_worker::{
+    AppsRunner, Installed, PackageLoader, PeerPolicy, ProcClient, WorkerCard, WorkerHost,
+};
 
 /// Extension of a cached package file.
 const PACKAGE_EXT: &str = "lpkg";
+
+/// Overrides the data dir (specs/01-pairing.md, Files).
+const DATA_DIR_ENV: &str = "LATTICE_DATA_DIR";
 
 /// Command-line arguments.
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
-    /// Node key file. Created on first run. Default: `$TMPDIR/lattice/worker.key`.
-    #[arg(long)]
-    key: Option<PathBuf>,
-    /// Loopback UDP address to listen on (experiment mode refuses any other).
-    #[arg(long, default_value = "127.0.0.1:7441")]
+    /// UDP address to listen on.
+    #[arg(long, default_value = "0.0.0.0:7441")]
     listen: SocketAddr,
     /// `latticed-proc` socket. Default: `$LATTICE_PROC_SOCK`, else the runtime dir.
     #[arg(long)]
     proc_sock: Option<PathBuf>,
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Cmd {
+    /// Pair with the deck that made this invite (`lattice add-deck`; specs/01-pairing.md).
+    AddDeck {
+        /// The invite code (`lattice1:…`) the deck shows.
+        invite: String,
+        /// This worker's name, shown on the deck. Default: the host name.
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -49,31 +74,132 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let args = Args::parse();
-    let dir = runtime_dir()?;
-    let key = load_or_create_key(&args.key.unwrap_or_else(|| dir.join("worker.key")))?;
+    let files = private_dir(&data_dir()?.join("worker"))?;
+    match args.cmd {
+        Some(Cmd::AddDeck { invite, name }) => add_deck(&files, &invite, name).await,
+        None => serve(&files, args.listen, args.proc_sock).await,
+    }
+}
+
+/// Runs the worker daemon until the transport closes.
+async fn serve(files: &Path, listen: SocketAddr, proc_sock: Option<PathBuf>) -> anyhow::Result<()> {
+    let run = runtime_dir()?;
+    let key = load_or_create_key(&files.join("node.key"))?;
     let id = key.node_id();
-    let cfg = QuicConfig::direct(key, args.listen).map_err(|e| anyhow::anyhow!(e.code()))?;
-    let transport = QuicTransport::bind(cfg).await?;
+    let transport = QuicTransport::bind(QuicConfig::direct_lan(key, listen)).await?;
     let addr = transport.local_addr()?;
-    let card = format!("{}@{addr}", hex(id.as_bytes()));
-    std::fs::write(dir.join("worker.addr"), &card).context("write worker.addr")?;
-    tracing::info!(%card, "worker listening (experiment: loopback only)");
-    let proc_path = args.proc_sock.unwrap_or_else(ProcClient::default_path);
+    let card = format!("{id}@{addr}");
+    std::fs::write(run.join("worker.addr"), &card).context("write worker.addr")?;
+    tracing::info!(%card, "worker listening; allowlisted decks only");
+    let proc_path = proc_sock.unwrap_or_else(ProcClient::default_path);
     let proc = ProcClient::connect(&proc_path).await?;
     let engine = lattice_wasm::engine().map_err(|e| anyhow::anyhow!(e.code()))?;
-    let cache = private_dir(&dir.join("packages"))?;
+    let cache = private_dir(&files.join("packages"))?;
     let loader = package_loader(engine, cache.clone());
     let apps = cached_packages(&cache, &loader);
-    WorkerHost::new(
-        transport,
-        proc,
-        PeerPolicy::allow_any_loopback(),
-        apps,
-        loader,
-    )
-    .run()
-    .await?;
+    let policy = PeerPolicy::allow_file(files.join("decks"));
+    WorkerHost::new(transport, proc, policy, apps, loader)
+        .run()
+        .await?;
     Ok(())
+}
+
+/// `latticed add-deck <invite>`: dials the deck with the worker key, proves the invite, and
+/// adds the deck to the allowlist (specs/01-pairing.md, rules 3–9).
+async fn add_deck(files: &Path, code: &str, name: Option<String>) -> anyhow::Result<()> {
+    let invite = lattice_worker::Invite::decode(code)
+        .map_err(|e| anyhow::anyhow!("bad invite: {}", e.code()))?;
+    let port = listen_port()?;
+    let ip =
+        lattice_quic::advertise_ip(Some(invite.addr().ip())).context("no route to the deck")?;
+    let me = WorkerCard {
+        name: name.unwrap_or_else(host_name),
+        addr: SocketAddr::new(ip, port),
+    };
+    let key = load_or_create_key(&files.join("node.key"))?;
+    let bind = SocketAddr::new(unspecified(invite.addr()), 0);
+    let transport = QuicTransport::bind(QuicConfig::direct_lan(key, bind)).await?;
+    transport.add_peer(invite.deck(), invite.addr());
+    println!(
+        "pairing with deck {} at {}…",
+        short(invite.deck()),
+        invite.addr()
+    );
+    let deck = lattice_worker::add_deck(&transport, &invite, &me, &files.join("decks"), unix_now())
+        .await
+        .map_err(|e| anyhow::anyhow!("pairing failed: {}", e.code()))?;
+    println!(
+        "paired with deck \"{}\" ({}); it reaches this worker at {}",
+        deck.name,
+        short(deck.id),
+        me.addr
+    );
+    Ok(())
+}
+
+/// The port the running `latticed` listens on, from `worker.addr`.
+fn listen_port() -> anyhow::Result<u16> {
+    let path = runtime_dir()?.join("worker.addr");
+    let card = std::fs::read_to_string(&path)
+        .with_context(|| format!("latticed is not running here (no {})", path.display()))?;
+    let addr = card
+        .trim()
+        .rsplit_once('@')
+        .map(|(_, a)| a)
+        .unwrap_or_default();
+    let addr: SocketAddr = addr.parse().context("bad worker.addr")?;
+    Ok(addr.port())
+}
+
+/// `0.0.0.0` or `[::]`, the family of `peer`.
+fn unspecified(peer: SocketAddr) -> std::net::IpAddr {
+    match peer {
+        SocketAddr::V4(_) => std::net::Ipv4Addr::UNSPECIFIED.into(),
+        SocketAddr::V6(_) => std::net::Ipv6Addr::UNSPECIFIED.into(),
+    }
+}
+
+/// The first 8 hex digits of a NodeId, for messages.
+fn short(id: lattice_key::NodeId) -> String {
+    id.to_string().chars().take(8).collect()
+}
+
+/// The host name (`hostname -s`), else `worker`.
+fn host_name() -> String {
+    std::process::Command::new("hostname")
+        .arg("-s")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "worker".to_owned())
+}
+
+/// Seconds since the Unix epoch.
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
+
+/// The data dir (specs/01-pairing.md, Files): `$LATTICE_DATA_DIR`, else the OS data dir.
+/// `lattice-deck-core` callers resolve the same dir.
+fn data_dir() -> anyhow::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os(DATA_DIR_ENV) {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("no HOME")?;
+    if cfg!(target_os = "macos") {
+        return Ok(home.join("Library/Application Support/lattice"));
+    }
+    Ok(match std::env::var_os("XDG_DATA_HOME") {
+        Some(xdg) => PathBuf::from(xdg).join("lattice"),
+        None => home.join(".local/share/lattice"),
+    })
 }
 
 /// Verifies a package, compiles its runner, and caches the bytes (best effort).
@@ -146,12 +272,12 @@ fn parse_hash(text: &str) -> Option<PackageHash> {
     Some(PackageHash::from_bytes(raw))
 }
 
-/// `$TMPDIR/lattice` (created, mode 0700), shared with `latticed-proc` and the deck.
+/// `$TMPDIR/lattice` (created, mode 0700), shared with `latticed-proc`.
 fn runtime_dir() -> anyhow::Result<PathBuf> {
     private_dir(&std::env::temp_dir().join("lattice"))
 }
 
-/// Creates `dir` (mode 0700) if missing. TBD: a data dir that survives reboots for packages.
+/// Creates `dir` (mode 0700) if missing.
 fn private_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     std::fs::DirBuilder::new()
@@ -181,11 +307,6 @@ fn load_or_create_key(path: &Path) -> anyhow::Result<NodeKey> {
         std::io::Write::write_all(&mut f, &bytes).context("write node key")?;
     }
     Ok(NodeKey::from_secret(SecretKeyBytes::new(bytes)))
-}
-
-/// Lowercase hex. TBD: canonical text form of a NodeId (09-platform-l1.md).
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

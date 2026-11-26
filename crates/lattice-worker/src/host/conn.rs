@@ -50,7 +50,7 @@ pub(super) async fn accept_loop<T: Transport + 'static>(
                 continue;
             }
         };
-        if !policy.permits(&peer) {
+        if !policy.permits(&peer).await {
             tracing::warn!(?peer, "connection refused by policy");
             continue; // dropping `conn` closes it
         }

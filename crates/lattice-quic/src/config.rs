@@ -26,7 +26,8 @@ impl ConfigError {
 pub(crate) enum Mode {
     /// Relay first, then hole-punched direct (01-transport.md, Connect sequence).
     Relay(HomeRelay),
-    /// Plain UDP to addresses from [`crate::QuicTransport::add_peer`]. Loopback only.
+    /// Plain UDP to addresses from [`crate::QuicTransport::add_peer`]: loopback
+    /// ([`QuicConfig::direct`]) or any address ([`QuicConfig::direct_lan`]).
     Direct,
 }
 
@@ -68,6 +69,19 @@ impl QuicConfig {
             mode: Mode::Direct,
             bind,
         })
+    }
+
+    /// Direct-only mode on any address, LAN included (ROADMAP M1.6, M1.7).
+    ///
+    /// Security: the transport accepts any key that completes the handshake. Use it only
+    /// behind a host that checks every peer: the worker's allowlist (specs/01-pairing.md,
+    /// rule 12), or a deck that accepts only pairing connections and checks their secret.
+    pub fn direct_lan(key: NodeKey, bind: SocketAddr) -> Self {
+        Self {
+            key,
+            mode: Mode::Direct,
+            bind,
+        }
     }
 }
 

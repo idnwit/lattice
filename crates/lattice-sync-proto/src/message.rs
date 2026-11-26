@@ -1,8 +1,10 @@
 //! Wire messages (02-sync.md, Wire messages table).
 
+use crate::pair::PairSecret;
 use crate::stream::{Have, Seq, StreamId, StreamInfo};
 use lattice_key::{NodeId, Signature};
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 /// Reader-chosen id that matches an `Action` to its `ActionResult`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -46,7 +48,7 @@ pub struct Change {
 /// Number of [`Message`] variants: postcard tags `0..MESSAGE_TAGS` are known.
 /// A tag at or above it is a newer peer's message (02, rule 5).
 /// Bump when appending a variant.
-pub(crate) const MESSAGE_TAGS: u32 = 14;
+pub(crate) const MESSAGE_TAGS: u32 = 17;
 
 /// Every sync message. Variant order is the wire tag: append only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +150,26 @@ pub enum Message {
         /// The bytes; the receiver verifies the hash.
         bytes: Vec<u8>,
     },
+    /// Worker → deck, first message of a pairing connection (specs/01-pairing.md, rule 5).
+    /// The deck reads the worker NodeId from TLS, never from here.
+    PairRequest {
+        /// The invite's secret.
+        secret: PairSecret,
+        /// Worker display name (`build-01`).
+        name: String,
+        /// Where the deck reaches the worker.
+        addr: SocketAddr,
+    },
+    /// Deck → worker: the secret was valid; the worker is saved (rule 7).
+    PairOk {
+        /// Deck display name.
+        name: String,
+    },
+    /// Deck → worker: pairing refused (rule 8). `pair.bad_secret`, `pair.expired`, `pair.used`.
+    PairDenied {
+        /// Stable error code.
+        code: String,
+    },
 }
 
 #[cfg(test)]
@@ -156,12 +178,11 @@ mod tests {
 
     #[test]
     fn message_tags_counts_every_variant() {
-        // `Blob` is the last variant. Appending one must bump MESSAGE_TAGS.
-        let blob = Message::Blob {
-            hash: [0; 32],
-            bytes: Vec::new(),
+        // `PairDenied` is the last variant. Appending one must bump MESSAGE_TAGS.
+        let last = Message::PairDenied {
+            code: String::new(),
         };
-        let wire = postcard::to_allocvec(&blob).unwrap();
+        let wire = postcard::to_allocvec(&last).unwrap();
         assert_eq!(u32::from(wire[0]), MESSAGE_TAGS - 1);
     }
 }

@@ -36,12 +36,15 @@
 //! - [`AppsRunner`]: packages, instances, journals, effects, delta queues; [`Installed`],
 //!   [`PackageLoader`]: how a package a deck sends becomes runnable.
 //! - [`WorkerStream`]: `worker/apps` and `inst/<iid>/state`.
-//! - [`PeerPolicy`]: which NodeIds may connect.
+//! - [`PeerPolicy`], [`Allowlist`]: which NodeIds may connect (the `worker/decks` file).
+//! - [`add_deck`]: the worker side of pairing (`lattice add-deck`, specs/01-pairing.md).
 
+mod allowlist;
 mod apps;
 mod delta_queue;
 mod error;
 mod host;
+mod pair;
 mod policy;
 mod proc_client;
 mod runner;
@@ -54,8 +57,12 @@ mod wire;
 
 pub use apps::{AppsEffect, AppsRunner, Installed, PackageLoader, RunnerFactory, StateSync};
 
+pub use allowlist::Allowlist;
 pub use error::WorkerError;
 pub use host::WorkerHost;
+/// The pairing invite `add_deck` takes (re-exported for `latticed`).
+pub use lattice_sync_proto::Invite;
+pub use pair::{PairError, PairedDeck, WorkerCard, add_deck};
 pub use policy::PeerPolicy;
 pub use proc_client::ProcClient;
 pub use runner::{DynRunner, Input, Mode, Step, hosted};

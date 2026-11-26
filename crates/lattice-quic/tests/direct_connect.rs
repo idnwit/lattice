@@ -167,3 +167,20 @@ async fn datagrams_roundtrip_and_connect_reuses_the_connection() {
     drop((conn, again, deck));
     tokio::time::timeout(STEP, server).await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn direct_lan_binds_any_address_and_reports_both_node_ids() {
+    let server = QuicTransport::bind(QuicConfig::direct_lan(key(1), "0.0.0.0:0".parse().unwrap()))
+        .await
+        .unwrap();
+    let client = QuicTransport::bind(QuicConfig::direct_lan(key(2), "0.0.0.0:0".parse().unwrap()))
+        .await
+        .unwrap();
+    let port = server.local_addr().unwrap().port();
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    client.add_peer(server.local_id(), addr);
+    let accept = tokio::spawn(async move { server.accept().await.map(|(peer, _)| peer) });
+    let conn = client.connect(key(1).node_id()).await.unwrap();
+    assert_eq!(conn.remote_id(), key(1).node_id());
+    assert_eq!(accept.await.unwrap().unwrap(), key(2).node_id());
+}
