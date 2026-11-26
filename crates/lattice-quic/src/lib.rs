@@ -10,7 +10,8 @@
 //!
 //! Two modes:
 //!
-//! - **Relay** ([`QuicConfig::new`]): relay first, then direct. Skeleton.
+//! - **Relay** ([`QuicConfig::new`]): every peer through the home relay. Direct
+//!   upgrade by hole punching lands with ROADMAP M2.5.
 //! - **Direct-only** ([`QuicConfig::direct`], ROADMAP M1.5): plain UDP to
 //!   addresses from [`QuicTransport::add_peer`]. Binds loopback only.
 //!   [`QuicConfig::direct_lan`] binds any address, for hosts that check every
@@ -42,7 +43,8 @@
 //! - [`QuicConfig`]: node key, mode (relay or direct-only), bind address.
 //! - [`ConfigError`]: refused configs (non-loopback direct bind).
 //! - [`advertise_ip`]: the local IP a peer reaches us at.
-//! - `MagicSocket` (internal, skeleton): relay + direct + probes on one UDP socket.
+//! - `MagicSocket` (internal): relay path under one virtual address per peer; direct
+//!   paths and probes land with M2.5.
 
 mod advertise;
 mod config;

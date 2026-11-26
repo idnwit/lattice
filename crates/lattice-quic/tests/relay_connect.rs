@@ -7,8 +7,10 @@
 
 use lattice_key::{NodeKey, SecretKeyBytes};
 use lattice_quic::{QuicConfig, QuicTransport};
-use lattice_relay_proto::{DEFAULT_TTL, EngineOutput, Now, RelayEngine, Token};
-use lattice_transport::{Conn, HomeRelay, PathKind, RecvStream, SendStream, Transport};
+use lattice_relay_proto::{DEFAULT_TTL, EngineOutput, Now, RelayEngine, SEND_HEADER_LEN, Token};
+use lattice_transport::{
+    Conn, HomeRelay, PathKind, RecvStream, SendStream, Transport, TransportError,
+};
 use std::net::SocketAddr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
@@ -18,9 +20,9 @@ fn key(seed: u8) -> NodeKey {
 }
 
 /// Minimal relay loop for tests. Mirrors `lattice-relay`'s driver.
-async fn spawn_relay() -> HomeRelay {
+async fn spawn_relay(bind: &str) -> HomeRelay {
     let relay_key = key(100);
-    let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let sock = UdpSocket::bind(bind).await.unwrap();
     let addr: SocketAddr = sock.local_addr().unwrap();
     let mut engine = RelayEngine::new(relay_key.node_id(), DEFAULT_TTL);
     tokio::spawn(async move {
@@ -29,6 +31,11 @@ async fn spawn_relay() -> HomeRelay {
         let mut n_tok = 0u8;
         loop {
             let (n, src) = sock.recv_from(&mut buf).await.unwrap();
+            // Paths rule 7: 1200-byte QUIC payload + the 41-byte SEND header.
+            assert!(
+                n <= 1200 + SEND_HEADER_LEN,
+                "datagram of {n} bytes to the relay"
+            );
             n_tok = n_tok.wrapping_add(1);
             let unix_secs = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -57,10 +64,19 @@ async fn spawn_relay() -> HomeRelay {
 }
 
 #[tokio::test]
-#[ignore = "contract: lands with QuicTransport and MagicSocket"]
 async fn connect_via_relay_then_echo_on_a_bi_stream() {
-    let relay = spawn_relay().await;
-    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    echo_via_relay("127.0.0.1:0").await;
+}
+
+/// Paths rule 9: on an IPv6 socket quinn sees peers in v4-mapped form.
+#[tokio::test]
+async fn connect_via_relay_on_ipv6_sockets() {
+    echo_via_relay("[::1]:0").await;
+}
+
+async fn echo_via_relay(at: &str) {
+    let relay = spawn_relay(at).await;
+    let bind: SocketAddr = at.parse().unwrap();
     let worker = QuicTransport::bind(QuicConfig::new(key(1), relay, bind))
         .await
         .unwrap();
@@ -76,6 +92,8 @@ async fn connect_via_relay_then_echo_on_a_bi_stream() {
         let n = rx.read(&mut buf).await.unwrap().unwrap();
         tx.write_all(&buf[..n]).await.unwrap();
         tx.finish().unwrap();
+        // Keep the worker endpoint alive until the deck has read the echo.
+        let _closed = conn.accept_bi().await;
     });
 
     let conn = deck.connect(worker_id).await.unwrap();
@@ -90,4 +108,20 @@ async fn connect_via_relay_then_echo_on_a_bi_stream() {
     let mut buf = [0u8; 4];
     assert_eq!(rx.read(&mut buf).await.unwrap(), Some(4));
     assert_eq!(&buf, b"ping");
+}
+
+/// Connect sequence rule 3: no registration within 5 s fails instead of hanging.
+#[tokio::test]
+async fn connect_without_a_reachable_relay_is_unreachable() {
+    // A bound socket that never answers stands in for a dead relay.
+    let silent = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let relay = HomeRelay::new(silent.local_addr().unwrap(), key(100).node_id());
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let deck = QuicTransport::bind(QuicConfig::new(key(2), relay, bind))
+        .await
+        .unwrap();
+    let started = Instant::now();
+    let err = deck.connect(key(1).node_id()).await.unwrap_err();
+    assert_eq!(err, TransportError::Unreachable);
+    assert!(started.elapsed() < std::time::Duration::from_secs(7));
 }
