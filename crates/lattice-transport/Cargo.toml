@@ -12,5 +12,9 @@ bytes.workspace = true
 lattice-key.workspace = true
 thiserror.workspace = true
 
+# Test-only: path FSM simulation (.rules/verification.md, path selection scope).
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
