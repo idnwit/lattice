@@ -73,6 +73,7 @@ Details: [architecture/04-worker.md](../architecture/04-worker.md), [05-deck.md]
 | Port forward | Mapping `worker:remote → deck localhost:local`, owned by a session |
 | Extension | User-facing name for a `files`-kind app that opens file types or links |
 | Invite | One-time pairing offer from a deck: deck NodeId, `ip:port`, secret, 5-minute TTL. Shown as `lattice add-deck <invite code>` (D47) |
+| Attach | A CLI client (`lattice attach`) bound to one `terminal` instance in a local terminal. Detaching leaves the instance running |
 | Allowlist | The decks a worker serves (`worker/decks`). M1 stand-in for the device list |
 
 ## Spec index
