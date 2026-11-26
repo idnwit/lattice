@@ -41,7 +41,7 @@ TBD: detecting a dead link takes the QUIC idle timeout (30 s, lattice-quic). Add
 | no worker | dim ring (offline) | `no worker` |
 
 A paired worker that is not the active one shows offline (M1 links one worker).
-TBD: `connecting` uses the `idle` ring (proposed); the canvas has no connecting state.
+Canvas: "Desktop — Add worker · invite flow · no worker · link states".
 
 ## Worker states
 

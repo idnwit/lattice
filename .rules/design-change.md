@@ -13,7 +13,7 @@ One HTML5 app, two devices (Desktop + Mobile) on one simulated cloud.
 3. **Update the simulator** to match.
 4. **Update `docs/`**: the affected spec, and `docs/design-system/` if tokens or components change.
 5. **Done** only when both devices still run the whole flow:
-   sign in → pair worker (code or QR) → sessions → tabs → splits → shell → ports → agents (TTY / Visual / zoom) → agents overview → approvals → files as tabs → extensions.
+   sign in → add worker (invite command) → sessions → tabs → splits → shell → ports → agents (TTY / Visual / zoom) → agents overview → approvals → files as tabs → extensions.
 
 ## Design invariants (do not break)
 
