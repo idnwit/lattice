@@ -807,6 +807,30 @@ to = "sync-proto"
 kinds = ["uses"]
 reason = "reads BlobRequest, ActionResult and stream ids on the worker link"
 
+[[link]]
+from = "cli"
+to = "sync-proto"
+kinds = ["uses"]
+reason = "invite TTL and pairing messages (lattice invite)"
+
+[[link]]
+from = "latticed"
+to = "sync-proto"
+kinds = ["uses"]
+reason = "decodes the invite for latticed add-deck"
+
+[[link]]
+from = "deck-core"
+to = "sync-proto"
+kinds = ["reexports"]
+reason = "re-exports INVITE_TTL_SECS for the CLI"
+
+[[link]]
+from = "worker"
+to = "sync-proto"
+kinds = ["reexports"]
+reason = "re-exports Invite for latticed add-deck"
+
 [[complexity]]
 bricks = "*"
 cognitive = 15
