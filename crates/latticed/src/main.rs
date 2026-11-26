@@ -22,6 +22,9 @@
 #![allow(clippy::print_stdout)]
 
 mod packages;
+mod runtime;
+
+use runtime::runtime_dir;
 
 use std::io::Read;
 use std::net::SocketAddr;
@@ -79,33 +82,43 @@ async fn main() -> anyhow::Result<()> {
             };
             add_deck(&files, &invite, name).await
         }
-        None => serve(&files, args.listen, args.proc_sock).await,
+        None => {
+            let proc_sock = args.proc_sock.unwrap_or_else(ProcClient::default_path);
+            serve(&files, &runtime_dir()?, args.listen, &proc_sock).await
+        }
     }
 }
 
-/// Runs the worker daemon until the transport closes.
-async fn serve(files: &Path, listen: SocketAddr, proc_sock: Option<PathBuf>) -> anyhow::Result<()> {
+/// Runs the worker daemon until the transport closes. `run` is the runtime dir.
+async fn serve(
+    files: &Path,
+    run: &Path,
+    listen: SocketAddr,
+    proc_sock: &Path,
+) -> anyhow::Result<()> {
     // Versions of this boot start here, above every version of an earlier boot
     // (06-apps.md, Sync to viewers rules 10–12).
     let epoch = BootEpoch::from_unix_millis(unix_millis());
-    let run = runtime_dir()?;
+    // Start order (04-worker.md, `latticed`): proc first; worker.addr only once serving.
+    let proc = ProcClient::connect(proc_sock).await.with_context(|| {
+        format!(
+            "no latticed-proc at {}: start it first",
+            proc_sock.display()
+        )
+    })?;
     let key = load_or_create_key(&files.join("node.key"))?;
     let id = key.node_id();
     let transport = QuicTransport::bind(QuicConfig::direct_lan(key, listen)).await?;
-    let addr = transport.local_addr()?;
-    let card = format!("{id}@{addr}");
-    std::fs::write(run.join("worker.addr"), &card).context("write worker.addr")?;
-    tracing::info!(%card, "worker listening; allowlisted decks only");
-    let proc_path = proc_sock.unwrap_or_else(ProcClient::default_path);
-    let proc = ProcClient::connect(&proc_path).await?;
+    let card = format!("{id}@{}", transport.local_addr()?);
     let engine = lattice_wasm::engine().map_err(|e| anyhow::anyhow!(e.code()))?;
     let cache = private_dir(&files.join("packages"))?;
     let loader = packages::package_loader(engine, cache.clone());
     let apps = packages::cached_packages(&cache, &loader, epoch);
     let policy = PeerPolicy::allow_file(files.join("decks"));
-    WorkerHost::new(transport, proc, policy, apps, loader)
-        .run()
-        .await?;
+    let host = WorkerHost::new(transport, proc, policy, apps, loader);
+    runtime::publish_card(run, &card)?;
+    tracing::info!(%card, "worker listening; allowlisted decks only");
+    host.run().await?;
     Ok(())
 }
 
@@ -114,7 +127,7 @@ async fn serve(files: &Path, listen: SocketAddr, proc_sock: Option<PathBuf>) -> 
 async fn add_deck(files: &Path, code: &str, name: Option<String>) -> anyhow::Result<()> {
     let invite = lattice_worker::Invite::decode(code)
         .map_err(|e| anyhow::anyhow!("bad invite: {}", e.code()))?;
-    let port = listen_port()?;
+    let port = runtime::listen_port(&runtime_dir()?)?;
     let ip =
         lattice_quic::advertise_ip(Some(invite.addr().ip())).context("no route to the deck")?;
     let me = WorkerCard {
@@ -165,20 +178,6 @@ async fn read_invite() -> anyhow::Result<String> {
         "no invite: pass it as an argument or on stdin"
     );
     Ok(code.to_owned())
-}
-
-/// The port the running `latticed` listens on, from `worker.addr`.
-fn listen_port() -> anyhow::Result<u16> {
-    let path = runtime_dir()?.join("worker.addr");
-    let card = std::fs::read_to_string(&path)
-        .with_context(|| format!("latticed is not running here (no {})", path.display()))?;
-    let addr = card
-        .trim()
-        .rsplit_once('@')
-        .map(|(_, a)| a)
-        .unwrap_or_default();
-    let addr: SocketAddr = addr.parse().context("bad worker.addr")?;
-    Ok(addr.port())
 }
 
 /// `0.0.0.0` or `[::]`, the family of `peer`.
@@ -240,13 +239,8 @@ fn data_dir() -> anyhow::Result<PathBuf> {
     })
 }
 
-/// `$TMPDIR/lattice` (created, mode 0700), shared with `latticed-proc`.
-fn runtime_dir() -> anyhow::Result<PathBuf> {
-    private_dir(&std::env::temp_dir().join("lattice"))
-}
-
 /// Creates `dir` (mode 0700) if missing.
-fn private_dir(dir: &Path) -> anyhow::Result<PathBuf> {
+pub(crate) fn private_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -275,4 +269,25 @@ fn load_or_create_key(path: &Path) -> anyhow::Result<NodeKey> {
         std::io::Write::write_all(&mut f, &bytes).context("write node key")?;
     }
     Ok(NodeKey::from_secret(SecretKeyBytes::new(bytes)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 04-worker.md, `latticed` start order.
+    #[tokio::test]
+    async fn a_missing_proc_daemon_is_named_and_publishes_no_worker_addr() {
+        let dir = std::env::temp_dir().join(format!("latticed-noproc-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        let files = private_dir(&dir.join("worker")).unwrap();
+        let run = private_dir(&dir.join("run")).unwrap();
+        let sock = dir.join("missing.sock");
+        let listen = "127.0.0.1:0".parse().unwrap();
+        let err = serve(&files, &run, listen, &sock).await.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains(&sock.display().to_string()), "msg={msg}");
+        assert!(!run.join("worker.addr").exists(), "no stale worker.addr");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

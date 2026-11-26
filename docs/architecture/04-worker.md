@@ -183,6 +183,7 @@ One tag table serves every message:
 ## `latticed`
 
 - Runs one runner per app instance (06-apps.md). Built-in runners are native in M1; WASM from M4.
+- Start order: connect to `latticed-proc` first. When it does not answer, `latticed` exits with an error that names the socket path, and writes no file. Then it binds QUIC, installs the cached packages, writes `worker.addr` (specs/01-pairing.md, Files), and serves.
 - The `terminal` runner holds a VT emulator behind `trait Emulator`. Uses `vt100` (pure Rust, no I/O, builds for `wasm32-unknown-unknown`); evaluate `libghostty-vt` later. Not covered yet: concealed text (`SGR 8`), strikeout, buffered synchronized updates.
 - Publishes one stream per state tree, `inst/<iid>/<tree>` (02-sync.md). Decks get the current tree, then changes.
 - **Restart recovery**: `List`, then per journal: new runner from `meta`, `start` with effects dropped, `Subscribe{from_off: start_off}`, replay to `end_off`, then live.
