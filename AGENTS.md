@@ -18,6 +18,7 @@ Workflow: PR-only to `main`, rebase merge, Conventional Commits on every commit,
 | Path | What |
 |---|---|
 | `docs/README.md` | Docs index |
+| `docs/ROADMAP.md` | Milestones M1–M4, scope, exit criteria |
 | `docs/architecture/` | Platform design: transport, sync, identity, worker, deck, apps, layouts. Decision log |
 | `docs/specs/` | Feature specs. Source of truth for user-visible behavior |
 | `docs/design-system/` | Lattice design system: tokens, components, patterns |
