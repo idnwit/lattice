@@ -19,11 +19,11 @@
 //! #     transport: T,
 //! #     loader: lattice_worker::PackageLoader,
 //! # ) -> Result<(), lattice_worker::WorkerError> {
-//! use lattice_worker::{AppsRunner, PeerPolicy, ProcClient, WorkerHost};
+//! use lattice_worker::{AppsRunner, BootEpoch, PeerPolicy, ProcClient, WorkerHost};
 //!
 //! let proc = ProcClient::connect("/run/user/1000/lattice/proc.sock".as_ref()).await?;
 //! // No app yet: packages come from the cache (`install`) or from decks (`loader`).
-//! let apps = AppsRunner::new();
+//! let apps = AppsRunner::new(BootEpoch::from_unix_millis(1_700_000_000_000));
 //! WorkerHost::new(transport, proc, PeerPolicy::allow_list(Vec::new()), apps, loader).run().await
 //! # }
 //! ```
@@ -33,7 +33,8 @@
 //! - [`WorkerHost`]: accept loop; one task per deck connection.
 //! - [`PeerSession`]: sans-IO handler of one deck's sync messages.
 //! - [`ProcClient`]: async IPC client for `latticed-proc`.
-//! - [`AppsRunner`]: packages, instances, journals, effects, delta queues; [`Installed`],
+//! - [`AppsRunner`]: packages, instances, journals, effects, delta queues; [`BootEpoch`]
+//!   (a boot's first version); [`Installed`],
 //!   [`PackageLoader`]: how a package a deck sends becomes runnable.
 //! - [`WorkerStream`]: `worker/apps` and `inst/<iid>/state`.
 //! - [`PeerPolicy`], [`Allowlist`]: which NodeIds may connect (the `worker/decks` file).
@@ -56,6 +57,7 @@ mod test_app;
 mod wire;
 
 pub use apps::{AppsEffect, AppsRunner, Installed, PackageLoader, RunnerFactory, StateSync};
+pub use delta_queue::BootEpoch;
 
 pub use allowlist::Allowlist;
 pub use error::WorkerError;

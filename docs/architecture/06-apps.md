@@ -198,7 +198,7 @@ TBD: cache eviction policy for unused packages on a worker? A data dir that surv
 
 ## Sync to viewers
 
-1. Each instance has one state stream, `inst/<iid>/state`. Its version counts committed deltas.
+1. Each instance has one state stream, `inst/<iid>/state`. Its version counts committed deltas from the boot epoch (rule 10).
 2. The runner keeps the last 1024 deltas in a queue. Older ones drop.
 3. A deck subscribes with the last version it holds, or none.
 4. Held version inside the queue: the worker sends the missing deltas, then live deltas.
@@ -207,6 +207,15 @@ TBD: cache eviction policy for unused packages on a worker? A data dir that surv
 7. History never crosses the wire. Decks get state and deltas only.
 8. A delta that fails to apply is a bug: log it, then resubscribe without a version.
 9. Wire mapping (02-sync.md): the worker is the only writer and the version is its `seq`. Full state = `Snapshot{covers: {worker: version}}`; delta = `Change{writer: worker, seq: version}`. `prev_hash`, `ts`, and `sig` are unused for `State` streams in M1 (TBD: signing).
+10. Versions start at a per-boot **epoch**, not at 0: `unix_ms << 20` of the `latticed` start, saturating. `worker/apps` and every `inst/<iid>/state` start there.
+    Reason: the queue and the version restart with `latticed`. A pre-restart version must never match a post-restart one.
+11. Every version of a boot is greater than every version of an earlier boot. A deck that resumes with a pre-restart version gets the full state (rule 5), never deltas.
+    Assumption 1: a boot commits fewer than 2^20 deltas per stream per millisecond it runs.
+    Assumption 2: the wall clock never steps back between two boots.
+    Checks: unit test `a_resume_from_before_a_restart_gets_the_full_state`; end-to-end test `an_instance_survives_a_latticed_restart` (ROADMAP M1.9).
+12. The apps runner gets the epoch from `latticed` at boot. It never reads a clock (sans-IO).
+
+TBD: guard against the wall clock stepping back between two boots (persist the last epoch in the data dir?).
 
 ## Restore
 
@@ -215,6 +224,7 @@ TBD: cache eviction policy for unused packages on a worker? A data dir that surv
 3. Then it goes live: effects run, and `wake_at` is read.
 4. A `Gap` during replay calls `on_gap` and marks the instance `degraded`.
 5. An app upgrade restores the same way. The new runner replays raw output, so state needs no migration.
+6. A restored instance keeps its `iid`. Its state stream restarts at the new boot epoch (Sync to viewers rule 10), so decks resync from the full state.
 
 ## Clean points
 

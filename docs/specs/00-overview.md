@@ -59,6 +59,7 @@ Details: [architecture/04-worker.md](../architecture/04-worker.md), [05-deck.md]
 | Viewer | Deck-side part of an app. Renders the instance state as a view tree and sends actions |
 | Params | Typed input to create an instance (e.g. `cwd`). Validated against the manifest |
 | Delta | Encoded changes of one committed reducer call. Decks apply deltas in version order |
+| Boot epoch | First version of every `State` stream a worker serves in one `latticed` run: `unix_ms << 20` at its start. Versions after a restart exceed all earlier ones |
 | Journal | Per-instance history in `latticed-proc`: meta plus process output and exits. The only source for restore |
 | Clean point | Journal offset where older output no longer affects state. The runner trims there |
 | Layout | Data tree that places app widgets on screen |

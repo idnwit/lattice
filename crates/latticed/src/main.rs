@@ -33,7 +33,7 @@ use lattice_package::Package;
 use lattice_quic::{QuicConfig, QuicTransport};
 use lattice_wasm::{Limits, WasmApp};
 use lattice_worker::{
-    AppsRunner, Installed, PackageLoader, PeerPolicy, ProcClient, WorkerCard, WorkerHost,
+    AppsRunner, BootEpoch, Installed, PackageLoader, PeerPolicy, ProcClient, WorkerCard, WorkerHost,
 };
 
 /// Extension of a cached package file.
@@ -83,6 +83,9 @@ async fn main() -> anyhow::Result<()> {
 
 /// Runs the worker daemon until the transport closes.
 async fn serve(files: &Path, listen: SocketAddr, proc_sock: Option<PathBuf>) -> anyhow::Result<()> {
+    // Versions of this boot start here, above every version of an earlier boot
+    // (06-apps.md, Sync to viewers rules 10–12).
+    let epoch = BootEpoch::from_unix_millis(unix_millis());
     let run = runtime_dir()?;
     let key = load_or_create_key(&files.join("node.key"))?;
     let id = key.node_id();
@@ -96,7 +99,7 @@ async fn serve(files: &Path, listen: SocketAddr, proc_sock: Option<PathBuf>) -> 
     let engine = lattice_wasm::engine().map_err(|e| anyhow::anyhow!(e.code()))?;
     let cache = private_dir(&files.join("packages"))?;
     let loader = package_loader(engine, cache.clone());
-    let apps = cached_packages(&cache, &loader);
+    let apps = cached_packages(&cache, &loader, epoch);
     let policy = PeerPolicy::allow_file(files.join("decks"));
     WorkerHost::new(transport, proc, policy, apps, loader)
         .run()
@@ -184,6 +187,14 @@ fn unix_now() -> u64 {
         .unwrap_or_default()
 }
 
+/// Milliseconds since the Unix epoch: the boot epoch of this run.
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
+}
+
 /// The data dir (specs/01-pairing.md, Files): `$LATTICE_DATA_DIR`, else the OS data dir.
 /// `lattice-deck-core` callers resolve the same dir.
 fn data_dir() -> anyhow::Result<PathBuf> {
@@ -229,9 +240,10 @@ fn load_package(
     Ok(Installed::new(package.manifest, runner))
 }
 
-/// Every package in the cache, installed. A file that does not load is skipped and logged.
-fn cached_packages(cache: &Path, loader: &PackageLoader) -> AppsRunner {
-    let mut apps = AppsRunner::new();
+/// A runner at `epoch` with every package in the cache installed. A file that does not load
+/// is skipped and logged.
+fn cached_packages(cache: &Path, loader: &PackageLoader, epoch: BootEpoch) -> AppsRunner {
+    let mut apps = AppsRunner::new(epoch);
     let Ok(entries) = std::fs::read_dir(cache) else {
         return apps;
     };
@@ -330,7 +342,7 @@ mod tests {
         let file = cache.join(format!("{}.{PACKAGE_EXT}", echo.package()));
         assert!(file.is_file(), "the package is cached by hash");
 
-        let apps = cached_packages(&cache, &loader);
+        let apps = cached_packages(&cache, &loader, BootEpoch::from_unix_millis(0));
         assert!(apps.has_package(&echo.package()));
         std::fs::remove_dir_all(cache).unwrap();
     }
