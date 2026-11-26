@@ -8,14 +8,12 @@ use std::time::Duration;
 
 /// One live registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code, reason = "L1 skeleton: read by the engine once implemented")]
 pub(crate) struct Registration {
     node_id: NodeId,
     addr: SocketAddr,
     expires: Duration,
 }
 
-#[allow(dead_code, reason = "L1 skeleton: read by the engine once implemented")]
 impl Registration {
     /// Registered node.
     pub(crate) fn node_id(&self) -> NodeId {
@@ -26,34 +24,33 @@ impl Registration {
     pub(crate) fn addr(&self) -> SocketAddr {
         self.addr
     }
+
+    fn live(&self, now: Duration) -> bool {
+        now < self.expires
+    }
 }
 
 /// `token → (node_id, src addr, expiry)`. Deterministic: `BTreeMap`, injected time.
 #[derive(Debug, Default)]
-#[allow(dead_code, reason = "L1 skeleton: read once the table is implemented")]
 pub(crate) struct TokenTable {
     by_token: BTreeMap<Token, Registration>,
     by_node: BTreeMap<NodeId, Token>,
 }
 
-#[allow(
-    dead_code,
-    reason = "L1 skeleton: called by the engine once implemented"
-)]
 impl TokenTable {
     /// An empty table.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Adds or refreshes `node_id` at `addr` until `now + ttl`. Returns its token.
+    /// True when `token` is bound to any registration, live or not yet expired out.
+    pub(crate) fn contains(&self, token: Token) -> bool {
+        self.by_token.contains_key(&token)
+    }
+
+    /// Adds or refreshes `node_id` at `addr` until `now + ttl`.
     ///
     /// A node re-registering from a new address replaces its old binding.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub(crate) fn register(
         &mut self,
         node_id: NodeId,
@@ -62,59 +59,66 @@ impl TokenTable {
         now: Duration,
         ttl: Duration,
     ) {
-        // drop the node's previous token, if any
-        // insert token → Registration { node_id, addr, expires: now + ttl } and node → token
-        todo!()
+        if let Some(old) = self.by_node.insert(node_id, token) {
+            self.by_token.remove(&old);
+        }
+        let expires = now.saturating_add(ttl);
+        self.by_token.insert(
+            token,
+            Registration {
+                node_id,
+                addr,
+                expires,
+            },
+        );
     }
 
     /// The registration for `token`, only when `src` is its bound address (anti-spoof).
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
+    ///
+    /// Compares IP and port only: IPv6 flow info may change between datagrams.
     pub(crate) fn authorize(
         &self,
         token: Token,
         src: SocketAddr,
         now: Duration,
     ) -> Option<&Registration> {
-        // lookup token; reject when expired or addr != src
-        todo!()
+        self.live(token, now).filter(|r| same_endpoint(r.addr, src))
+    }
+
+    /// The live registration for `token`, from any address.
+    pub(crate) fn live(&self, token: Token, now: Duration) -> Option<&Registration> {
+        self.by_token.get(&token).filter(|r| r.live(now))
     }
 
     /// Where `node_id` is reachable now.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub(crate) fn lookup_node(&self, node_id: NodeId, now: Duration) -> Option<&Registration> {
-        // by_node → by_token; skip expired
-        todo!()
+        let token = self.by_node.get(&node_id)?;
+        self.by_token.get(token).filter(|r| r.live(now))
     }
 
     /// Extends a registration on keepalive.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub(crate) fn refresh(&mut self, token: Token, now: Duration, ttl: Duration) {
-        // set expires = now + ttl when the token exists
-        todo!()
+        if let Some(r) = self.by_token.get_mut(&token) {
+            r.expires = now.saturating_add(ttl);
+        }
     }
 
     /// Drops expired entries. Call on a timer.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub(crate) fn expire(&mut self, now: Duration) {
-        // remove every registration with expires <= now from both maps
-        todo!()
+        let by_node = &mut self.by_node;
+        self.by_token.retain(|token, r| {
+            let keep = r.live(now);
+            if !keep && by_node.get(&r.node_id) == Some(token) {
+                by_node.remove(&r.node_id);
+            }
+            keep
+        });
     }
+}
+
+/// Same IP (v4-mapped equals v4) and port.
+fn same_endpoint(a: SocketAddr, b: SocketAddr) -> bool {
+    a.ip().to_canonical() == b.ip().to_canonical() && a.port() == b.port()
 }
 
 #[cfg(test)]
@@ -133,7 +137,6 @@ mod tests {
     const TTL: Duration = Duration::from_secs(60);
 
     #[test]
-    #[ignore = "contract: lands with TokenTable"]
     fn send_accepted_only_from_the_tokens_bound_address() {
         let mut t = TokenTable::new();
         let tok = Token::from_bytes([1; 8]);
@@ -143,7 +146,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "contract: lands with TokenTable"]
     fn expired_token_is_refused() {
         let mut t = TokenTable::new();
         let tok = Token::from_bytes([2; 8]);
@@ -154,7 +156,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "contract: lands with TokenTable"]
     fn keepalive_refresh_extends_the_registration() {
         let mut t = TokenTable::new();
         let tok = Token::from_bytes([3; 8]);

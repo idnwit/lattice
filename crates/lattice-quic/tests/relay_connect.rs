@@ -7,10 +7,10 @@
 
 use lattice_key::{NodeKey, SecretKeyBytes};
 use lattice_quic::{QuicConfig, QuicTransport};
-use lattice_relay_proto::{EngineOutput, RelayEngine, Token};
+use lattice_relay_proto::{DEFAULT_TTL, EngineOutput, Now, RelayEngine, Token};
 use lattice_transport::{Conn, HomeRelay, PathKind, RecvStream, SendStream, Transport};
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 
 fn key(seed: u8) -> NodeKey {
@@ -22,7 +22,7 @@ async fn spawn_relay() -> HomeRelay {
     let relay_key = key(100);
     let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = sock.local_addr().unwrap();
-    let mut engine = RelayEngine::new(relay_key.node_id(), Duration::from_secs(60));
+    let mut engine = RelayEngine::new(relay_key.node_id(), DEFAULT_TTL);
     tokio::spawn(async move {
         let start = Instant::now();
         let mut buf = vec![0u8; 2048];
@@ -30,8 +30,12 @@ async fn spawn_relay() -> HomeRelay {
         loop {
             let (n, src) = sock.recv_from(&mut buf).await.unwrap();
             n_tok = n_tok.wrapping_add(1);
+            let unix_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             let out = engine.handle(
-                start.elapsed(),
+                Now::new(start.elapsed(), unix_secs),
                 src,
                 &buf[..n],
                 Token::from_bytes([n_tok; 8]),

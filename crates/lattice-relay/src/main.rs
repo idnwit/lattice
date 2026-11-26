@@ -6,12 +6,22 @@
 //! All decisions live in the sans-IO `RelayEngine`; this file only moves bytes
 //! (`.rules/architecture.md` rule 3: I/O in adapters and binaries).
 
+use anyhow::Context;
 use clap::Parser;
-use lattice_key::NodeKey;
-use lattice_relay_proto::{EngineOutput, RelayEngine};
+use lattice_key::{NodeKey, SecretKeyBytes};
+use lattice_relay_proto::{DEFAULT_TTL, EngineOutput, Now, RelayEngine, Token, Transmit};
+use std::io::{BufReader, Read};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
+
+/// How often expired registrations and nonces are dropped (01-transport.md, Relay
+/// rules 1 and 7: expiry is checked on every datagram too, so this only bounds memory).
+const TICK: Duration = Duration::from_secs(1);
+/// Receive buffer: the largest UDP payload, so no datagram is cut (Relay rule 5 drops
+/// anything malformed; a cut packet would be forwarded corrupt).
+const MAX_DATAGRAM: usize = 65_535;
 
 /// Command-line arguments.
 #[derive(Debug, Parser)]
@@ -32,52 +42,106 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
     let key = load_or_create_key(&args.key)?;
-    let sock = UdpSocket::bind(args.listen).await?;
-    serve(sock, RelayEngine::new(key.node_id(), registration_ttl())).await
+    let sock = UdpSocket::bind(args.listen)
+        .await
+        .with_context(|| format!("bind {}", args.listen))?;
+    tracing::info!(addr = %sock.local_addr()?, relay_id = %key.node_id(), "relay listening");
+    serve(sock, RelayEngine::new(key.node_id(), DEFAULT_TTL)).await
 }
 
 /// Receives datagrams, runs the engine, sends its output. Expires on a timer.
-#[allow(
-    clippy::todo,
-    unused_variables,
-    reason = "L1 skeleton: body lands with its contract test"
-)]
-async fn serve(sock: UdpSocket, engine: RelayEngine) -> anyhow::Result<()> {
-    // loop: select! { recv_from → engine.handle(now, src, bytes, fresh_token), tick → engine.on_tick(now) }
-    // now = monotonic Duration since start; fresh_token from the OS RNG
-    // each handle() output goes through send_output; send errors are logged and dropped (UDP is best effort)
-    send_output(&sock, EngineOutput::Drop).await;
-    todo!()
+async fn serve(sock: UdpSocket, mut engine: RelayEngine) -> anyhow::Result<()> {
+    let start = Instant::now();
+    let mut tokens = TokenSource::open()?;
+    let mut buf = vec![0u8; MAX_DATAGRAM];
+    let mut tick = tokio::time::interval(TICK);
+    loop {
+        tokio::select! {
+            got = sock.recv_from(&mut buf) => {
+                // A public relay keeps serving: an ICMP-driven error on one datagram
+                // (e.g. a port unreachable on some OSes) must not stop it.
+                let (n, src) = match got {
+                    Ok(got) => got,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "recv failed");
+                        continue;
+                    }
+                };
+                let bytes = buf.get(..n).context("recv length above buffer")?;
+                let out = engine.handle(now(start), src, bytes, tokens.next()?);
+                send_output(&sock, out).await;
+            }
+            _ = tick.tick() => engine.on_tick(now(start)),
+        }
+    }
 }
 
-/// Sends what the engine decided.
-#[allow(
-    clippy::todo,
-    unused_variables,
-    reason = "L1 skeleton: body lands with its contract test"
-)]
+/// Both relay clocks: monotonic since start, wall clock in UNIX seconds.
+fn now(start: Instant) -> Now {
+    // A wall clock before 1970 only makes every REGISTER stale (rule 6): fail closed.
+    let unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    Now::new(start.elapsed(), unix_secs)
+}
+
+/// Sends what the engine decided. UDP is best effort: send errors are logged and dropped.
 async fn send_output(sock: &UdpSocket, out: EngineOutput) {
-    // Drop: nothing; Reply / Forward: send_to(t.dst()); Punch: both
-    todo!()
+    match out {
+        EngineOutput::Drop => {}
+        EngineOutput::Reply(t) | EngineOutput::Forward(t) => send(sock, &t).await,
+        EngineOutput::Punch(ts) => {
+            for t in &ts {
+                send(sock, t).await;
+            }
+        }
+    }
 }
 
-/// Reads the relay key, or creates it on first run.
-#[allow(
-    clippy::todo,
-    unused_variables,
-    reason = "L1 skeleton: body lands with its contract test"
-)]
-fn load_or_create_key(path: &std::path::Path) -> anyhow::Result<NodeKey> {
-    // same scheme as latticed (TBD: share via lattice-key helper if a third user appears)
-    todo!()
+async fn send(sock: &UdpSocket, t: &Transmit) {
+    if let Err(e) = sock.send_to(t.bytes(), t.dst()).await {
+        tracing::debug!(dst = %t.dst(), error = %e, "send failed");
+    }
 }
 
-/// How long a registration lives without keepalive.
-#[allow(
-    clippy::todo,
-    reason = "L1 skeleton: body lands with its contract test"
-)]
-fn registration_ttl() -> std::time::Duration {
-    // TBD: default ttl (08-infrastructure.md); must exceed KEEPALIVE_INTERVAL (25 s)
-    todo!()
+/// Random tokens from the OS RNG, buffered so a datagram rarely costs a syscall.
+struct TokenSource(BufReader<std::fs::File>);
+
+impl TokenSource {
+    fn open() -> anyhow::Result<Self> {
+        let f = std::fs::File::open("/dev/urandom").context("open /dev/urandom")?;
+        Ok(Self(BufReader::with_capacity(4096, f)))
+    }
+
+    fn next(&mut self) -> anyhow::Result<Token> {
+        let mut b = [0u8; 8];
+        self.0.read_exact(&mut b).context("read /dev/urandom")?;
+        Ok(Token::from_bytes(b))
+    }
 }
+
+/// Reads the relay key, or creates it with mode 0600 on first run. Never logs the bytes.
+///
+/// Same scheme as `latticed`. TBD: move into `lattice-key` if a third user appears.
+fn load_or_create_key(path: &Path) -> anyhow::Result<NodeKey> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut bytes = [0u8; 32];
+    if let Ok(mut f) = std::fs::File::open(path) {
+        f.read_exact(&mut bytes).context("read relay key")?;
+    } else {
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut r| r.read_exact(&mut bytes))
+            .context("read /dev/urandom")?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("create relay key {}", path.display()))?;
+        std::io::Write::write_all(&mut f, &bytes).context("write relay key")?;
+    }
+    Ok(NodeKey::from_secret(SecretKeyBytes::new(bytes)))
+}
+
+#[cfg(test)]
+mod tests;

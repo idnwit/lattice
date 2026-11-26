@@ -10,5 +10,9 @@ publish.workspace = true
 [dependencies]
 lattice-key.workspace = true
 
+# Test-only: codec properties (.rules/verification.md, relay codec scope).
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
