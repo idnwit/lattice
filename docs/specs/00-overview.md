@@ -28,8 +28,8 @@ Platform design: [../architecture/README.md](../architecture/README.md).
 | Component | Runs on | Role |
 |---|---|---|
 | `latticed-proc` | Worker | Frozen process daemon. Owns PTYs and children, raw output ring. Never restarts |
-| `latticed` | Worker | Upgradable connectivity daemon and apps runner. Transport, sync, VT emulation, app instances, hooks, files, SSH endpoint |
-| `lattice` CLI | Worker, desktop | `lattice add-deck`, `lattice attach`, `lattice session …`, `lo <file>`, app/layout dev tools |
+| `latticed` | Worker | Upgradable connectivity daemon and apps runner. Transport, sync, VT emulation, app instances, hooks, files, SSH endpoint. `latticed add-deck` is the worker side of pairing |
+| `lattice` CLI | Worker, desktop | `lattice add-deck` (worker), `lattice invite` (deck without a GUI; specs/01, CLI), `lattice attach`, `lattice session …`, `lo <file>`, app/layout dev tools |
 | Deck | macOS and iOS (v1), web (later) | Rust core (transport, sync, layouts) + NSH UI. 100% Rust |
 | Relay | Public (ours) or self-hosted | UDP forwarder: registration, first path, hole-punch coordination, fallback. Sees ciphertext only |
 | Ciphertext store | Later, optional | Mailbox/backup for device sync while peers are offline |
