@@ -116,10 +116,14 @@ trait Conn {
     fn send_datagram(&self, b: Bytes) -> Result<()>;
     async fn recv_datagram(&self) -> Result<Bytes>;
     fn path(&self) -> PathInfo;
+    fn close(&self, reason: CloseReason);
 }
 ```
 
 Nothing above L1 imports `quinn` types.
+
+1. Dropping a `Conn` does not close it: the transport keeps the connection for reuse (D4). A host ends one on purpose with `close(reason)`.
+2. `close(CloseReason::Refused)` closes the connection at once with an application close code. Every stream the peer has on it fails with `transport.refused`.
 
 ## Mobile (iOS)
 

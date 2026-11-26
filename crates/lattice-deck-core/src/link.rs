@@ -362,6 +362,10 @@ mod tests {
             "transport.unreachable"
         );
         assert_eq!(
+            DeckError::Transport(TransportError::Refused).code(),
+            "transport.refused"
+        );
+        assert_eq!(
             DeckError::Protocol("sync.malformed").code(),
             "sync.malformed"
         );

@@ -4,7 +4,7 @@ use super::*;
 use bytes::Bytes;
 use lattice_key::{NodeKey, SecretKeyBytes};
 use lattice_sync_proto::PairSecret;
-use lattice_transport::PathInfo;
+use lattice_transport::{CloseReason, PathInfo};
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
@@ -85,6 +85,10 @@ impl Conn for Dialed {
 
     fn remote_id(&self) -> NodeId {
         id(2)
+    }
+
+    fn close(&self, _reason: CloseReason) {
+        // Not observed by these tests.
     }
 }
 

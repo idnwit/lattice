@@ -5,13 +5,18 @@ use crate::tls::{self, Identity};
 use bytes::Bytes;
 use lattice_key::NodeId;
 use lattice_transport::{
-    Conn, HomeRelay, PathInfo, PathKind, RecvStream, SendStream, Transport, TransportError,
+    CloseReason, Conn, HomeRelay, PathInfo, PathKind, RecvStream, SendStream, Transport,
+    TransportError,
 };
 use quinn::rustls::pki_types::CertificateDer;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+/// Application close code for [`CloseReason::Refused`] (01-transport.md, Transport trait).
+/// Code 0 stays the generic close.
+const CLOSE_REFUSED: quinn::VarInt = quinn::VarInt::from_u32(1);
 
 /// A bound node: one UDP socket and one quinn endpoint.
 ///
@@ -102,8 +107,11 @@ impl QuicTransport {
         }
     }
 
+    /// Keeps `conn` for reuse and forgets closed ones, so refused peers do not pile up.
     fn remember(&self, peer: NodeId, conn: &quinn::Connection) {
-        lock(&self.conns).insert(peer, conn.clone());
+        let mut conns = lock(&self.conns);
+        conns.retain(|_, c| c.close_reason().is_none());
+        conns.insert(peer, conn.clone());
     }
 
     fn peer_addr(&self, peer: NodeId) -> Option<SocketAddr> {
@@ -185,6 +193,9 @@ fn conn_err(e: quinn::ConnectionError) -> TransportError {
     use quinn::ConnectionError as E;
     match e {
         E::TimedOut => TransportError::Unreachable,
+        E::ApplicationClosed(ref close) if close.error_code == CLOSE_REFUSED => {
+            TransportError::Refused
+        }
         E::LocallyClosed | E::ApplicationClosed(_) | E::ConnectionClosed(_) | E::Reset => {
             TransportError::Closed
         }
@@ -241,6 +252,12 @@ impl Conn for QuicConn {
 
     fn remote_id(&self) -> NodeId {
         self.remote
+    }
+
+    fn close(&self, reason: CloseReason) {
+        match reason {
+            CloseReason::Refused => self.inner.close(CLOSE_REFUSED, b"refused"),
+        }
     }
 }
 

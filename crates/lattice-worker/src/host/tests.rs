@@ -7,8 +7,10 @@ use lattice_app::{AppId, AppsAction, InstanceId, InstanceRecord};
 use lattice_key::{NodeId, NodeKey, SecretKeyBytes};
 use lattice_proc_ipc::{EntryKind, Offset, ProcId, decode_request, encode_reply};
 use lattice_sync_proto::{ActionId, Decoded, FrameDecoder, Have, Message, SubscribeMode, encode};
-use lattice_transport::{Conn, PathInfo, PathKind, RecvStream, SendStream, TransportError};
-use std::sync::Mutex;
+use lattice_transport::{
+    CloseReason, Conn, PathInfo, PathKind, RecvStream, SendStream, TransportError,
+};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
@@ -17,10 +19,21 @@ fn id(seed: u8) -> NodeId {
     NodeKey::from_secret(SecretKeyBytes::new([seed; 32])).node_id()
 }
 
-/// Accepts one deck, then waits forever.
-struct OneDeck(Mutex<Option<DuplexStream>>);
+/// One connection's state. The transport keeps a handle too, as `lattice-quic` does (D4),
+/// so dropping a `FakeConn` does not close it; `close` does.
+type Shared = Arc<Mutex<(Option<DuplexStream>, Option<CloseReason>)>>;
 
-struct FakeConn(Mutex<Option<DuplexStream>>);
+/// Accepts one deck, then waits forever.
+struct OneDeck(Mutex<Option<Shared>>, Shared);
+
+impl OneDeck {
+    fn new(pipe: DuplexStream) -> Self {
+        let shared: Shared = Arc::new(Mutex::new((Some(pipe), None)));
+        Self(Mutex::new(Some(shared.clone())), shared)
+    }
+}
+
+struct FakeConn(Shared);
 struct FakeSend(WriteHalf<DuplexStream>);
 struct FakeRecv(ReadHalf<DuplexStream>);
 
@@ -32,9 +45,9 @@ impl Transport for OneDeck {
     }
 
     async fn accept(&self) -> Result<(NodeId, FakeConn), TransportError> {
-        let pipe = self.0.lock().unwrap().take();
-        match pipe {
-            Some(p) => Ok((id(2), FakeConn(Mutex::new(Some(p))))),
+        let next = self.0.lock().unwrap().take();
+        match next {
+            Some(shared) => Ok((id(2), FakeConn(shared))),
             None => std::future::pending().await,
         }
     }
@@ -57,6 +70,7 @@ impl Conn for FakeConn {
             .0
             .lock()
             .unwrap()
+            .0
             .take()
             .ok_or(TransportError::Closed)?;
         let (r, w) = tokio::io::split(pipe);
@@ -77,6 +91,10 @@ impl Conn for FakeConn {
 
     fn remote_id(&self) -> NodeId {
         id(2)
+    }
+
+    fn close(&self, reason: CloseReason) {
+        *self.0.lock().unwrap() = (None, Some(reason));
     }
 }
 
@@ -174,18 +192,25 @@ impl Deck {
     }
 }
 
-/// A running host with the Echo app, a fake daemon, and a greeted deck.
-async fn start() -> (Deck, tokio::task::JoinHandle<Result<(), WorkerError>>) {
+type Worker = tokio::task::JoinHandle<Result<(), WorkerError>>;
+
+/// A running host with the Echo app and a fake daemon; one deck (`id(2)`) connects.
+async fn spawn_host(policy: PeerPolicy) -> (DuplexStream, Shared, Worker) {
     let (ours, theirs) = UnixStream::pair().unwrap();
     tokio::spawn(fake_daemon(theirs));
     let proc = ProcClient::handshake(ours).await.unwrap();
     // The worker ships no app: Echo arrives as a package on the first create (D44).
     let apps = AppsRunner::new();
     let (worker_end, deck_end) = tokio::io::duplex(64 * 1024);
-    let transport = OneDeck(Mutex::new(Some(worker_end)));
-    let policy = PeerPolicy::allow_list(vec![id(2)]);
+    let transport = OneDeck::new(worker_end);
+    let conn = transport.1.clone();
     let host = WorkerHost::new(transport, proc, policy, apps, echo_loader());
-    let worker = tokio::spawn(host.run());
+    (deck_end, conn, tokio::spawn(host.run()))
+}
+
+/// A running host with the Echo app, a fake daemon, and a greeted deck.
+async fn start() -> (Deck, Worker) {
+    let (deck_end, _conn, worker) = spawn_host(PeerPolicy::allow_list(vec![id(2)])).await;
     let mut deck = Deck {
         pipe: deck_end,
         dec: FrameDecoder::new(),
@@ -198,6 +223,20 @@ async fn start() -> (Deck, tokio::task::JoinHandle<Result<(), WorkerError>>) {
     .await;
     assert!(matches!(deck.recv().await, Message::Hello { node_id, .. } if node_id == id(1)));
     (deck, worker)
+}
+
+/// specs/01-pairing.md, rule 12: a refused deck sees its connection end, not a hang.
+#[tokio::test]
+async fn unpaired_deck_cannot_open_a_stream() {
+    let (mut deck_end, conn, worker) = spawn_host(PeerPolicy::allow_list(vec![id(9)])).await;
+    let mut buf = [0u8; 64];
+    let n = tokio::time::timeout(Duration::from_secs(2), deck_end.read(&mut buf))
+        .await
+        .expect("the worker closes a refused deck within 2 s")
+        .unwrap();
+    assert_eq!(n, 0, "no byte reaches a refused deck");
+    assert_eq!(conn.lock().unwrap().1, Some(CloseReason::Refused));
+    worker.abort();
 }
 
 fn subscribe(stream: &str) -> Message {
