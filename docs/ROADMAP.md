@@ -65,7 +65,6 @@ From [architecture/09-platform-l1.md](architecture/09-platform-l1.md). Settled f
 - TBD: width of `ProcId` on the wire (u32 or u64)?
 - TBD: ring capacity per process?
 - TBD: sync frame byte order, max frame length, stream id charset?
-- TBD: proc socket path on macOS?
 - TBD: default journal budget per instance?
 
 ### Out of scope for M1
