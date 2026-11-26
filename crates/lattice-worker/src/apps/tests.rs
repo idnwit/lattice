@@ -432,6 +432,29 @@ fn a_failed_spawn_releases_the_close_flow() {
     assert!(r.on_proc_reply(failed).iter().any(is_drop));
 }
 
+/// 06-apps.md, Instances rules 10-11: a failed spawn leaves the instance listed as `failed`;
+/// nothing drops it until a `close`.
+#[test]
+fn a_failed_spawn_keeps_the_instance_listed_until_a_close() {
+    let mut r = runner();
+    let (_, iid) = create(&mut r);
+    let failed = Reply::Error {
+        code: lattice_proc_ipc::ErrorCode::SpawnFailed,
+        msg: String::new(),
+    };
+    assert!(!r.on_proc_reply(failed).iter().any(is_drop));
+    let phase = |r: &AppsRunner| {
+        r.records()
+            .iter()
+            .find(|x| x.iid() == iid)
+            .map(InstanceRecord::phase)
+    };
+    assert_eq!(phase(&r), Some(InstancePhase::Failed));
+    let (effects, res) = r.on_apps_action(AppsAction::Close { iid });
+    assert_eq!(res, Ok(None));
+    assert!(effects.iter().any(is_drop), "the user's close drops it");
+}
+
 #[test]
 fn resume_sends_missing_deltas_or_the_full_state() {
     let mut r = runner();
