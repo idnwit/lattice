@@ -1,0 +1,5 @@
+# Manifest of the built-in echo app (06-apps.md, Manifest; D44).
+id = "dev.lattice.echo"
+name = "Echo"
+version = "0.1.0"
+# No [[spawn]]: echo starts no process.

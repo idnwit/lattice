@@ -1,0 +1,31 @@
+[package]
+name = "lattice-app-terminal"
+description = "Built-in terminal app: runner (feature runner) and viewer (feature viewer) over one TermState. Built to WASM packages (D42)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = ["runner", "viewer"]
+# Worker side: App impl (reducers, clean points). `latticed` links it.
+runner = ["dep:vt100", "dep:lattice-app-guest"]
+# Deck side: the viewer (view trees), built to `viewer.wasm` (D42, D43).
+viewer = ["dep:lattice-app-guest"]
+
+[lib]
+# `cdylib`: `runner.wasm` and `viewer.wasm` of the package (`wasm32-unknown-unknown`, D42).
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+lattice-app-guest = { workspace = true, optional = true }
+lattice-app.workspace = true
+lattice-state.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+# VT emulator (private runner memory). TODO(workspace): move to [workspace.dependencies]
+vt100 = { version = "=0.18.1", default-features = false, optional = true }
+
+[lints]
+workspace = true

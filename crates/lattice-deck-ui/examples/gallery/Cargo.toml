@@ -1,0 +1,17 @@
+# Harness for `nsh test` / `nsh run` only (nsh.json "rust"): the nsh CLI
+# mounts a root from a library crate, and the gallery is an example. Not a
+# workspace member: its own empty workspace keeps it out of the build.
+[package]
+name = "lattice-deck-ui-gallery"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[workspace]
+
+[dependencies]
+lattice-deck-ui = { path = "../.." }
+nsh-core = "=0.7.0"

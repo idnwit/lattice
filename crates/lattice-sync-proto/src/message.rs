@@ -43,6 +43,11 @@ pub struct Change {
     sig: Option<Signature>,
 }
 
+/// Number of [`Message`] variants: postcard tags `0..MESSAGE_TAGS` are known.
+/// A tag at or above it is a newer peer's message (02, rule 5).
+/// Bump when appending a variant.
+pub(crate) const MESSAGE_TAGS: u32 = 14;
+
 /// Every sync message. Variant order is the wire tag: append only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Message {
@@ -118,6 +123,11 @@ pub enum Message {
         id: ActionId,
         /// `None` on success, else a stable error code.
         error: Option<String>,
+        /// Encoded result on success (e.g. the new instance id of `create`); empty otherwise.
+        result: Vec<u8>,
+        /// On an app error, the app's error encoded (postcard); empty on success and on a
+        /// platform error (06-apps.md, Interface rule 6).
+        detail: Vec<u8>,
     },
     /// Fetch content-addressed bytes.
     BlobRequest {
@@ -129,4 +139,29 @@ pub enum Message {
         /// Stable error code.
         code: String,
     },
+    /// Answer to `BlobRequest` (app packages, 06-apps.md, Distribution).
+    ///
+    /// TBD: ranges and chunking for packages larger than one frame?
+    Blob {
+        /// blake3 hash.
+        hash: [u8; 32],
+        /// The bytes; the receiver verifies the hash.
+        bytes: Vec<u8>,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_tags_counts_every_variant() {
+        // `Blob` is the last variant. Appending one must bump MESSAGE_TAGS.
+        let blob = Message::Blob {
+            hash: [0; 32],
+            bytes: Vec::new(),
+        };
+        let wire = postcard::to_allocvec(&blob).unwrap();
+        assert_eq!(u32::from(wire[0]), MESSAGE_TAGS - 1);
+    }
 }

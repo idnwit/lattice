@@ -1,0 +1,26 @@
+[package]
+name = "lattice-wasm"
+description = "WASM host for app runners and viewers (ABI v0, D43): wasmtime modules driven as DynRunner and DynViewer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lattice-app.workspace = true
+lattice-app-guest.workspace = true
+lattice-state.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+wasmtime.workspace = true
+
+[dev-dependencies]
+lattice-builtin-apps.workspace = true
+lattice-package.workspace = true
+lattice-app-echo.workspace = true
+lattice-app-terminal.workspace = true
+lattice-worker.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "lattice-package"
+description = "App packages (D44): app.toml manifest, package bytes, blake3 hash and verification."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# Parses `app.toml`. Build scripts only; hosts read packages, never TOML.
+toml = ["dep:toml"]
+
+[dependencies]
+blake3.workspace = true
+lattice-app.workspace = true
+lattice-state.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml = { workspace = true, optional = true }
+
+[lints]
+workspace = true

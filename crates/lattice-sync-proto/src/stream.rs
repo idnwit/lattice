@@ -5,9 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-/// Stream path, e.g. `proc/<id>/raw`, `worker/metrics`, `user/meta`.
+/// Max length of a stream id, in bytes (02-sync.md, Model; proposed).
+pub const MAX_STREAM_ID_LEN: usize = 255;
+
+/// Stream path, e.g. `worker/apps`, `inst/<iid>/state`, `user/meta`.
 ///
-/// TBD: allowed characters and max length of a stream id.
+/// Valid ids (02-sync.md, Model; proposed): at most [`MAX_STREAM_ID_LEN`] bytes,
+/// non-empty segments of `[a-z0-9._-]` separated by `/`, no leading or
+/// trailing `/`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct StreamId(String);
@@ -27,15 +32,22 @@ impl StreamId {
 impl FromStr for StreamId {
     type Err = StreamIdError;
 
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     fn from_str(s: &str) -> Result<Self, StreamIdError> {
-        // non-empty segments separated by '/', no leading or trailing '/'
-        // character set and length limit: TBD (see type doc)
-        todo!()
+        if s.len() > MAX_STREAM_ID_LEN {
+            return Err(StreamIdError);
+        }
+        // `split` yields an empty segment for "", a leading, trailing, or doubled '/'.
+        let valid = s.split('/').all(|seg| {
+            !seg.is_empty()
+                && seg
+                    .bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
+        });
+        if valid {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(StreamIdError)
+        }
     }
 }
 
@@ -56,9 +68,9 @@ impl From<StreamId> for String {
 /// Stream kind (02-sync.md, Stream kinds).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamKind {
-    /// Single writer, append entries (raw PTY bytes, hook events).
+    /// Single writer, append entries.
     Log,
-    /// Single writer, diffs + full snapshot (terminal screen).
+    /// Single writer, deltas + full state (app instance state, `worker/apps`).
     State,
     /// Single writer, batches of points (metrics).
     Series,
@@ -93,14 +105,9 @@ impl Have {
     }
 
     /// Records `seq` from `writer`; never moves backwards.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn advance(&mut self, writer: NodeId, seq: Seq) {
-        // insert max(current, seq)
-        todo!()
+        let slot = self.0.entry(writer).or_insert(seq);
+        *slot = (*slot).max(seq);
     }
 }
 
@@ -134,22 +141,46 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "contract: lands with StreamId::from_str"]
     fn stream_id_accepts_paths_and_rejects_empty_segments() {
-        for ok in ["proc/1/raw", "worker/metrics", "user/meta"] {
+        for ok in ["inst/1/state", "worker/apps", "user/meta", "a.b_c-d/0"] {
             assert_eq!(
                 ok.parse::<StreamId>().map(|s| s.as_str().to_owned()),
                 Ok(ok.into()),
                 "case={ok}"
             );
         }
-        for bad in ["", "/proc", "proc/", "proc//raw"] {
+        for bad in ["", "/proc", "proc/", "proc//raw", "/"] {
             assert_eq!(bad.parse::<StreamId>(), Err(StreamIdError), "case={bad}");
         }
     }
 
     #[test]
-    #[ignore = "contract: lands with Have::advance"]
+    fn stream_id_rejects_other_characters() {
+        for bad in ["Inst/1", "inst/1 ", "inst/\u{e9}", "inst\\1", "inst/1:2"] {
+            assert_eq!(bad.parse::<StreamId>(), Err(StreamIdError), "case={bad}");
+        }
+    }
+
+    #[test]
+    fn stream_id_max_length_is_255_bytes() {
+        let max = "a".repeat(MAX_STREAM_ID_LEN);
+        assert!(max.parse::<StreamId>().is_ok());
+        let over = "a".repeat(MAX_STREAM_ID_LEN + 1);
+        assert_eq!(over.parse::<StreamId>(), Err(StreamIdError));
+    }
+
+    #[test]
+    fn stream_id_is_validated_when_deserialized() {
+        // postcard string: varint length 1, then "/".
+        assert!(postcard::from_bytes::<StreamId>(&[1, b'/']).is_err());
+        let ok = postcard::to_allocvec(&"worker/apps".parse::<StreamId>().unwrap()).unwrap();
+        assert_eq!(
+            postcard::from_bytes::<StreamId>(&ok).unwrap().as_str(),
+            "worker/apps"
+        );
+    }
+
+    #[test]
     fn have_never_moves_backwards() {
         let w =
             lattice_key::NodeKey::from_secret(lattice_key::SecretKeyBytes::new([1; 32])).node_id();

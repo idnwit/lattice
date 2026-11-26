@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "apps/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,17 +19,38 @@ lattice-sync-proto = { path = "crates/lattice-sync-proto" }
 lattice-quic = { path = "crates/lattice-quic" }
 lattice-worker = { path = "crates/lattice-worker" }
 lattice-deck-core = { path = "crates/lattice-deck-core" }
+lattice-deck-ui = { path = "crates/lattice-deck-ui" }
+lattice-state = { path = "crates/lattice-state" }
+lattice-state-macros = { path = "crates/lattice-state-macros" }
+lattice-app = { path = "crates/lattice-app" }
+lattice-app-guest = { path = "crates/lattice-app-guest" }
+lattice-wasm = { path = "crates/lattice-wasm" }
+lattice-package = { path = "crates/lattice-package" }
+lattice-builtin-apps = { path = "crates/lattice-builtin-apps" }
+lattice-app-macros = { path = "crates/lattice-app-macros" }
+lattice-app-echo = { path = "apps/echo" }
+lattice-app-terminal = { path = "apps/terminal" }
 
 # External crates. Each has a reason in the PR that adds it.
 anyhow = "1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 ed25519-dalek = "2"
+proc-macro2 = "1"
+proptest = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+# WASM host for app runners (D42, D43). Core wasm only: no component model, no WASI.
+wasmtime = { version = "=51.0.0", default-features = false, features = ["cranelift", "runtime", "std"] }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rustix = { version = "1", features = ["process", "pty", "termios", "event", "fs", "net"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+# Package hashes (06-apps.md, Distribution; D44).
+blake3 = { version = "=1.8.7", default-features = false, features = ["std"] }
+# app.toml, read at build time only.
+toml = { version = "=1.2.2", default-features = false, features = ["parse", "serde"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -24,14 +24,26 @@ impl Status {
     ///
     /// Priority: waiting > error > agent > online/relay > idle > offline
     /// (tokens.md; TBD there: confirm the order). `None` for no children.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn busiest(children: impl IntoIterator<Item = Status>) -> Option<Status> {
-        // rank each status by the priority list; return the max (first wins on ties)
-        todo!()
+        let mut best: Option<Status> = None;
+        for s in children {
+            if best.is_none_or(|b| s.rank() > b.rank()) {
+                best = Some(s);
+            }
+        }
+        best
+    }
+
+    /// Priority rank; higher wins.
+    fn rank(self) -> u8 {
+        match self {
+            Self::Waiting => 5,
+            Self::Error => 4,
+            Self::Agent => 3,
+            Self::Online | Self::Relay => 2,
+            Self::Idle => 1,
+            Self::Offline => 0,
+        }
     }
 }
 
@@ -41,7 +53,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "contract: lands with Status::busiest"]
     fn busiest_child_follows_the_token_priority() {
         let cases = [
             (vec![], None),

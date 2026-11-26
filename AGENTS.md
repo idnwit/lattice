@@ -25,7 +25,8 @@ Workflow: PR-only to `main`, rebase merge, Conventional Commits on every commit,
 | `docs/design-system/tokens.json` | Machine-readable tokens. Code imports from here |
 | `docs/images/` | README screenshots, rendered from the design canvas. Re-render when the canvas changes |
 | `.rules/` | Working rules. All apply, always |
-| `crates/` | Rust workspace. One crate per brick in `brickie.toml` |
+| `crates/` | Rust workspace: platform crates. One crate per brick in `brickie.toml` |
+| `apps/` | Built-in apps, one crate each (`echo`, `terminal`), built to WASM packages (D44) |
 | `brickie.toml` | Crate graph: bricks, rules, links. Edit only with `brickie design` |
 
 ## Sources of truth

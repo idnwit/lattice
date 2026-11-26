@@ -2,4 +2,4 @@
 [toolchain]
 channel = "1.100.0"
 components = ["clippy", "rustfmt", "rust-analyzer", "rust-src"]
-targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim"]
+targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim", "wasm32-unknown-unknown"]

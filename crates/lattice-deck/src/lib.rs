@@ -1,20 +1,20 @@
-//! Lattice deck: the native control center UI, built with NSH (pure Rust).
+//! Lattice deck: the native control center, built with NSH (pure Rust).
 //!
-//! A demo of two design mocks with static fixture data and no networking:
-//! the desktop workspace and the mobile terminal screen. [`DeckApp`] picks
-//! one by viewport width.
+//! The M1 PoC shell (D40) over `lattice-deck-ui`: tabs, splits, the `+` menu and the app
+//! picker of the built-in apps, and one WASM viewer per live pane (D42). The deck holds the
+//! app list (`lattice-builtin-apps`) and serves packages to the worker (D44).
 //!
-//! - `model`: view data the screens take as props.
-//! - `fixtures`: the mocks' values. Deck-core state replaces them later.
-//! - [`ui`]: NSH components; `ui::tokens` is generated from
-//!   `docs/design-system/tokens.json`.
+//! - `workspace`: tabs, split trees, panes, focus, as data.
+//! - `link`: the local worker link (experiment, `LATTICE_DECK_LIVE=1`) and the viewers.
+//! - `interp`: the view-tree interpreter.
+//! - [`DeckApp`]: the root component.
 
-mod fixtures;
-mod model;
-mod shell;
-pub mod ui;
+mod interp;
+mod link;
+mod root;
+mod workspace;
 
-pub use ui::DeckApp;
+pub use root::DeckApp;
 
 use nsh_core::prelude::*;
 

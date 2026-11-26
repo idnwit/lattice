@@ -1,53 +1,53 @@
-//! Stream ids for processes (02-sync.md, Examples).
+//! Stream ids served by the worker (02-sync.md, Examples; 06-apps.md, Sync to viewers).
 
-use lattice_proc_ipc::ProcId;
+use lattice_app::InstanceId;
 use lattice_sync_proto::StreamId;
 
-/// Which stream of a process.
+/// A stream the worker owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProcChannel {
-    /// `proc/<id>/raw`: raw PTY bytes, `Log` kind.
-    Raw,
+pub enum WorkerStream {
+    /// `worker/apps`: instance records; target of `create`, `close`, `kill`.
+    Apps,
+    /// `inst/<iid>/state`: one instance's state; target of its app actions.
+    State(InstanceId),
 }
 
-/// A process stream: `(process, channel)` ⇄ `proc/<id>/<channel>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProcStream {
-    proc: ProcId,
-    channel: ProcChannel,
-}
-
-impl ProcStream {
-    /// The stream for `channel` of `proc`.
-    pub fn new(proc: ProcId, channel: ProcChannel) -> Self {
-        Self { proc, channel }
-    }
-
-    /// The process.
-    pub fn proc(&self) -> ProcId {
-        self.proc
-    }
-
+impl WorkerStream {
     /// Its wire id.
-    #[allow(
-        clippy::todo,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub fn to_stream_id(&self) -> StreamId {
-        // format "proc/{raw id}/raw" and parse; the format is valid by construction
-        todo!()
+        let text = match self {
+            Self::Apps => "worker/apps".to_owned(),
+            Self::State(iid) => format!("inst/{iid}/state"),
+        };
+        #[allow(
+            clippy::expect_used,
+            reason = "lowercase words and a decimal number form a valid stream id"
+        )]
+        text.parse()
+            .expect("worker stream ids are valid by construction")
     }
 
-    /// Parses a wire id; `None` when it is not a process stream.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
+    /// Parses a wire id; `None` when the worker does not own it.
     pub fn parse(id: &StreamId) -> Option<Self> {
-        // split on '/': ["proc", decimal id, "raw"]; anything else None
-        todo!()
+        let mut parts = id.as_str().split('/');
+        let stream = match (parts.next(), parts.next(), parts.next()) {
+            (Some("worker"), Some("apps"), None) => Self::Apps,
+            (Some("inst"), Some(iid), Some("state")) => Self::State(parse_iid(iid)?),
+            _ => return None,
+        };
+        parts.next().is_none().then_some(stream)
     }
+}
+
+/// A canonical decimal instance id: no sign, no leading zero.
+fn parse_iid(text: &str) -> Option<InstanceId> {
+    if text.len() > 1 && text.starts_with('0') {
+        return None;
+    }
+    if !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok().map(InstanceId::from_raw)
 }
 
 #[cfg(test)]
@@ -55,11 +55,26 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "contract: lands with ProcStream"]
-    fn proc_stream_id_roundtrips() {
-        let s = ProcStream::new(ProcId::from_raw(42), ProcChannel::Raw);
-        assert_eq!(s.to_stream_id().as_str(), "proc/42/raw");
-        assert_eq!(ProcStream::parse(&s.to_stream_id()), Some(s));
-        assert_eq!(ProcStream::parse(&"user/meta".parse().unwrap()), None);
+    fn worker_stream_ids_roundtrip() {
+        let s = WorkerStream::State(InstanceId::from_raw(42));
+        assert_eq!(s.to_stream_id().as_str(), "inst/42/state");
+        assert_eq!(WorkerStream::parse(&s.to_stream_id()), Some(s));
+        assert_eq!(
+            WorkerStream::parse(&"worker/apps".parse().unwrap()),
+            Some(WorkerStream::Apps)
+        );
+        for other in [
+            "user/meta",
+            "inst/x/state",
+            "inst/07/state",
+            "inst/1/state/more",
+            "worker/apps/x",
+        ] {
+            assert_eq!(
+                WorkerStream::parse(&other.parse().unwrap()),
+                None,
+                "case={other}"
+            );
+        }
     }
 }

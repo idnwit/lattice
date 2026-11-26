@@ -43,6 +43,31 @@ The same sessions on a phone: terminal with a key bar, and the agent view with o
 
 Design sources of truth: the [design canvas](https://claude.ai/artifact/XgswugNGzHbdYaWjpYDDhe) and the [simulator](https://claude.ai/artifact/5rwS5TZeyK6fziD1YRM8ak).
 
+## Try the M1 PoC (macOS)
+
+A local worker and the deck, loopback only (experiment mode):
+
+```sh
+cargo run -p latticed-proc &                 # PTYs and journals
+cargo run -p latticed &                      # worker: fetches app packages from the deck
+LATTICE_DECK_LIVE=1 cargo run -p lattice-deck
+```
+
+Pick Terminal or Echo, `⌘D` / `⌘⇧D` to split (a split opens the app picker), `⌘W` to close.
+Apps are WASM packages built from [apps/](apps/) and embedded in the deck (D42–D44).
+
+## Third-party assets and licenses
+
+The deck bundles fonts so terminals look the same on every machine
+([crates/lattice-deck-ui/fonts/](crates/lattice-deck-ui/fonts/README.md)):
+
+| Asset | Version | License | Notes |
+|---|---|---|---|
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (Regular, Medium, Bold, Italic; WOFF2) | 2.304 | SIL Open Font License 1.1 ([text](crates/lattice-deck-ui/fonts/OFL-JetBrainsMono.txt)) | The `mono` font of the design system |
+| [Symbols Nerd Font Mono](https://github.com/ryanoasis/nerd-fonts) (symbols only) | 3.4.0 | MIT ([text](crates/lattice-deck-ui/fonts/LICENSE-NerdFonts.txt)) | Fallback for prompt icons (Private Use Area). The icon sets inside keep their upstream licenses (Font Awesome, Material Design Icons, Devicons, Octicons, …); see the Nerd Fonts [license notes](https://github.com/ryanoasis/nerd-fonts/blob/master/LICENSE) |
+
+Rust crates keep their own licenses (`Cargo.lock` lists them). TBD: the license of Lattice itself; a `cargo deny` license gate.
+
 ## Contributing
 
 PRs only, rebase merge, Conventional Commits on every commit. See [.rules/engineering.md](.rules/engineering.md).

@@ -17,6 +17,11 @@ impl Signature {
         Self(bytes)
     }
 
+    /// The 64 signature bytes, as sent on the wire (e.g. a TLS `CertificateVerify`).
+    pub fn to_bytes(&self) -> [u8; SIGNATURE_LEN] {
+        self.0
+    }
+
     pub(crate) fn from_dalek(sig: &ed25519_dalek::Signature) -> Self {
         Self(sig.to_bytes())
     }

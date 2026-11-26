@@ -23,10 +23,10 @@ Product features are **apps** on top of a generic platform.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ L4 Apps        app = worker part (wasm) + view part (wasm)        │
+│ L4 Apps        app = runner (worker) + viewer (deck) · instances  │
 │                layouts (data) · built-in apps · user/agent apps   │
 ├──────────────────────────────────────────────────────────────────┤
-│ L3 Platform    worker: process host · app host                    │
+│ L3 Platform    worker: process host · apps runner                 │
 │                deck: view host · layout engine · app host       │
 ├──────────────────────────────────────────────────────────────────┤
 │ L2 Sync        streams: Log · State · Series · Doc  + blobs       │
@@ -46,7 +46,7 @@ Product features are **apps** on top of a generic platform.
 │  PTYs, children, ring buf │                 │  transport · sync · app host │
 │        ▲ unix socket      │                 │  layout engine               │
 │ latticed  (upgradable)    │◀══ QUIC/E2E ══▶ │ view host (native UI)        │
-│  VT emu · sync · apps     │   relay|direct  │  renders view trees          │
+│  VT emu · sync · runner   │   relay|direct  │  renders view trees          │
 │  transport · hooks        │                 └──────────────────────────────┘
 └───────────────────────────┘          ▲
               ▲                        │  deck ⇄ deck: Doc sync (config, layouts)
@@ -62,7 +62,7 @@ Product features are **apps** on top of a generic platform.
 | 03 | [identity-security.md](03-identity-security.md) | Keys, device list, content keys, ACL, pairing crypto |
 | 04 | [worker.md](04-worker.md) | Process daemon, connectivity daemon, IPC, hooks |
 | 05 | [deck.md](05-deck.md) | Deck core, NSH UI, platforms |
-| 06 | [apps.md](06-apps.md) | App model, manifest, kinds, permissions, runtimes |
+| 06 | [apps.md](06-apps.md) | App model, instances, runner and viewer, create API, restore, manifest, permissions |
 | 07 | [layouts.md](07-layouts.md) | Layout data model and generation |
 | 08 | [infrastructure.md](08-infrastructure.md) | Relay, discovery, optional ciphertext store |
 | 09 | [platform-l1.md](09-platform-l1.md) | Layer 1 crates, skeleton status, contract tests, open TBDs |

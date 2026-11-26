@@ -1,0 +1,29 @@
+[package]
+name = "lattice-app-echo"
+description = "Built-in echo app: runner (feature runner) and viewer (feature viewer) over one EchoState. No process. Built to WASM packages (D42)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = ["runner", "viewer"]
+# Worker side: App impl (reducers). `latticed` links it.
+runner = ["dep:lattice-app-guest"]
+# Deck side: the viewer (view trees), built to `viewer.wasm` (D42, D43).
+viewer = ["dep:lattice-app-guest"]
+
+[lib]
+# `cdylib`: `runner.wasm` and `viewer.wasm` of the package (`wasm32-unknown-unknown`, D42).
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+lattice-app-guest = { workspace = true, optional = true }
+lattice-app.workspace = true
+lattice-state.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

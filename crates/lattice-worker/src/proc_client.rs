@@ -1,35 +1,42 @@
 //! Async client of `latticed-proc` (04-worker.md, Local IPC).
 
 use crate::error::WorkerError;
-use lattice_proc_ipc::{FrameDecoder, Reply, Request};
+use lattice_proc_ipc::{
+    FrameDecoder, PROTOCOL_VERSION, Reply, Request, decode_reply, encode_request,
+};
 use std::path::Path;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
+
+/// Bytes read from the socket per call.
+const READ_CHUNK: usize = 64 * 1024;
 
 /// One IPC connection to the process daemon.
 ///
 /// Requests are written in order; replies and output stream back on the same
 /// socket and are read with [`ProcClient::next_reply`].
 #[derive(Debug)]
-#[allow(dead_code, reason = "L1 skeleton: read once the client is implemented")]
 pub struct ProcClient {
     sock: UnixStream,
     decoder: FrameDecoder,
+    buf: Vec<u8>,
 }
 
 impl ProcClient {
+    /// Default socket of `latticed-proc` (04-worker.md, Local IPC): `$LATTICE_PROC_SOCK`,
+    /// else `$XDG_RUNTIME_DIR/lattice/proc.sock`, else `$TMPDIR/lattice/proc.sock`.
+    pub fn default_path() -> std::path::PathBuf {
+        lattice_proc_ipc::default_socket_path()
+    }
+
     /// Connects and exchanges `Hello`.
     ///
     /// # Errors
     ///
     /// [`WorkerError::Proc`] when the socket is missing or the version is unsupported.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub async fn connect(path: &Path) -> Result<Self, WorkerError> {
-        // UnixStream::connect(path), map io errors to Proc; then handshake
-        todo!()
+        let sock = UnixStream::connect(path).await.map_err(io_error)?;
+        Self::handshake(sock).await
     }
 
     /// Exchanges `Hello` on an open socket.
@@ -37,14 +44,23 @@ impl ProcClient {
     /// # Errors
     ///
     /// [`WorkerError::Proc`] when the daemon closes or speaks another version.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub async fn handshake(sock: UnixStream) -> Result<Self, WorkerError> {
-        // send Hello{PROTOCOL_VERSION, features}; expect Reply::Hello with version 1
-        todo!()
+        let mut client = Self {
+            sock,
+            decoder: FrameDecoder::new(),
+            buf: vec![0; READ_CHUNK],
+        };
+        client
+            .send(&Request::Hello {
+                version: PROTOCOL_VERSION,
+                features: 0,
+            })
+            .await?;
+        match client.next_reply().await? {
+            Reply::Hello { version, .. } if version == PROTOCOL_VERSION => Ok(client),
+            Reply::Hello { .. } => Err(WorkerError::Proc("unsupported version".to_owned())),
+            _ => Err(WorkerError::Proc("expected hello".to_owned())),
+        }
     }
 
     /// Sends one request.
@@ -52,37 +68,49 @@ impl ProcClient {
     /// # Errors
     ///
     /// [`WorkerError::Proc`] when the socket write fails.
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub async fn send(&mut self, req: &Request) -> Result<(), WorkerError> {
-        // encode_request into a buffer; write_all
-        todo!()
+        let mut wire = Vec::new();
+        encode_request(req, &mut wire);
+        self.sock.write_all(&wire).await.map_err(io_error)
     }
 
     /// Waits for the next reply or output frame. Unknown types are skipped.
     ///
+    /// Cancel-safe: bytes already read stay in the decoder, so it may sit in a `select!`.
+    ///
     /// # Errors
     ///
     /// [`WorkerError::Ipc`] on a malformed frame; [`WorkerError::Proc`] on EOF.
-    #[allow(
-        clippy::todo,
-        reason = "L1 skeleton: body lands with its contract test"
-    )]
     pub async fn next_reply(&mut self) -> Result<Reply, WorkerError> {
-        // loop: decoder.next_frame(); Some(frame) → decode_reply; None (unknown) → continue
-        //       need more bytes → read from sock; EOF → Proc("closed")
-        todo!()
+        loop {
+            if let Some(frame) = self.decoder.next_frame().map_err(WorkerError::Ipc)? {
+                match decode_reply(&frame).map_err(WorkerError::Ipc)? {
+                    Some(reply) => return Ok(reply),
+                    None => {
+                        tracing::debug!("unknown reply type from proc daemon skipped");
+                        continue;
+                    }
+                }
+            }
+            let n = self.sock.read(&mut self.buf).await.map_err(io_error)?;
+            let Some(read) = self.buf.get(..n).filter(|r| !r.is_empty()) else {
+                return Err(WorkerError::Proc("closed".to_owned()));
+            };
+            self.decoder.push(read);
+        }
     }
+}
+
+/// An I/O error as a log-safe text (kind only, never paths or bytes).
+fn io_error(e: std::io::Error) -> WorkerError {
+    WorkerError::Proc(e.kind().to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lattice_proc_ipc::{FrameDecoder, PROTOCOL_VERSION, decode_request, encode_reply};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use lattice_proc_ipc::decode_request;
+    use lattice_proc_ipc::encode_reply;
 
     /// Fake daemon side: reads one request, answers with `reply`.
     async fn answer(sock: &mut UnixStream, reply: &Reply) -> Request {
@@ -102,7 +130,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "contract: lands with ProcClient"]
     async fn hello_first_then_requests_and_replies_in_order() {
         let (ours, mut daemon) = UnixStream::pair().unwrap();
         let hello = Reply::Hello {
@@ -119,9 +146,33 @@ mod tests {
         ));
         let mut client = client.unwrap();
         client.send(&Request::List).await.unwrap();
-        let procs = Reply::Procs(Vec::new());
+        let procs = Reply::Journals(Vec::new());
         let (reply, got) = tokio::join!(client.next_reply(), answer(&mut daemon, &procs));
         assert_eq!(got, Request::List);
         assert_eq!(reply.unwrap(), procs);
+    }
+
+    #[tokio::test]
+    async fn eof_ends_the_client_with_a_proc_error() {
+        let (ours, mut daemon) = UnixStream::pair().unwrap();
+        let hello = Reply::Hello {
+            version: PROTOCOL_VERSION,
+            features: 0,
+        };
+        let (client, _) = tokio::join!(ProcClient::handshake(ours), answer(&mut daemon, &hello));
+        let mut client = client.unwrap();
+        drop(daemon);
+        assert_eq!(client.next_reply().await.unwrap_err().code(), "worker.proc");
+    }
+
+    #[tokio::test]
+    async fn another_version_is_refused() {
+        let (ours, mut daemon) = UnixStream::pair().unwrap();
+        let hello = Reply::Hello {
+            version: 2,
+            features: 0,
+        };
+        let (client, _) = tokio::join!(ProcClient::handshake(ours), answer(&mut daemon, &hello));
+        assert!(client.is_err());
     }
 }

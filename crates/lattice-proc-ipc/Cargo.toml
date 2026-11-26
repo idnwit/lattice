@@ -10,5 +10,9 @@ publish.workspace = true
 # Frozen: std only. latticed-proc links this crate (.rules/architecture.md, forbidden edges).
 [dependencies]
 
+# Test-only: codec fuzz-style properties (.rules/verification.md).
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

@@ -2,21 +2,29 @@
 //!
 //! Owner specs: `docs/architecture/04-worker.md` and `02-sync.md`.
 //! It talks to the frozen `latticed-proc` over the local IPC socket
-//! ([`ProcClient`]), publishes each process as sync streams, and serves deck
-//! connections that arrive through `lattice_transport::Transport`.
+//! ([`ProcClient`]), runs one app runner per instance ([`AppsRunner`]),
+//! publishes `worker/apps` and each instance's `inst/<iid>/state`, and serves
+//! deck connections that arrive through `lattice_transport::Transport`.
 //! It never names `quinn`: `latticed` passes the concrete transport in.
 //!
-//! Not here yet (later layers): VT emulation and the `screen` State stream
-//! (`lattice-vt`), WASM apps (`lattice-wasm`), hook ingestion, files.
+//! Restore reads only journals in `latticed-proc` (06-apps.md, Design philosophy).
+//! The worker ships no app (D44): a `create` naming a package it lacks makes it ask the deck
+//! (`BlobRequest` → `Blob`), verify the hash, and install it through the [`PackageLoader`]
+//! `latticed` passes (WASM runners via `lattice-wasm`). Not here yet: hook ingestion, files.
 //!
 //! # Usage
 //!
 //! ```no_run
-//! # async fn run<T: lattice_transport::Transport + 'static>(transport: T) -> Result<(), lattice_worker::WorkerError> {
-//! use lattice_worker::{PeerPolicy, ProcClient, WorkerHost};
+//! # async fn run<T: lattice_transport::Transport + 'static>(
+//! #     transport: T,
+//! #     loader: lattice_worker::PackageLoader,
+//! # ) -> Result<(), lattice_worker::WorkerError> {
+//! use lattice_worker::{AppsRunner, PeerPolicy, ProcClient, WorkerHost};
 //!
 //! let proc = ProcClient::connect("/run/user/1000/lattice/proc.sock".as_ref()).await?;
-//! WorkerHost::new(transport, proc, PeerPolicy::allow_list(Vec::new())).run().await
+//! // No app yet: packages come from the cache (`install`) or from decks (`loader`).
+//! let apps = AppsRunner::new();
+//! WorkerHost::new(transport, proc, PeerPolicy::allow_list(Vec::new()), apps, loader).run().await
 //! # }
 //! ```
 //!
@@ -25,19 +33,31 @@
 //! - [`WorkerHost`]: accept loop; one task per deck connection.
 //! - [`PeerSession`]: sans-IO handler of one deck's sync messages.
 //! - [`ProcClient`]: async IPC client for `latticed-proc`.
-//! - [`ProcStream`]: stream ids per process (`proc/<id>/raw`).
+//! - [`AppsRunner`]: packages, instances, journals, effects, delta queues; [`Installed`],
+//!   [`PackageLoader`]: how a package a deck sends becomes runnable.
+//! - [`WorkerStream`]: `worker/apps` and `inst/<iid>/state`.
 //! - [`PeerPolicy`]: which NodeIds may connect.
 
+mod apps;
+mod delta_queue;
 mod error;
 mod host;
 mod policy;
 mod proc_client;
+mod runner;
 mod session;
+mod spawn;
 mod streams;
+#[cfg(test)]
+mod test_app;
+mod wire;
+
+pub use apps::{AppsEffect, AppsRunner, Installed, PackageLoader, RunnerFactory, StateSync};
 
 pub use error::WorkerError;
 pub use host::WorkerHost;
 pub use policy::PeerPolicy;
 pub use proc_client::ProcClient;
+pub use runner::{DynRunner, Input, Mode, Step, hosted};
 pub use session::{PeerSession, SessionEffect};
-pub use streams::{ProcChannel, ProcStream};
+pub use streams::WorkerStream;

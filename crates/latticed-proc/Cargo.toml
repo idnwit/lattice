@@ -1,6 +1,6 @@
 [package]
 name = "latticed-proc"
-description = "Frozen process daemon: PTYs, children, ring buffer, IPC server. Sync, poll-based."
+description = "Frozen process daemon: PTYs, children, per-instance journals, IPC server. Sync, poll-based."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,27 @@ publish.workspace = true
 lattice-proc-ipc.workspace = true
 rustix.workspace = true
 
-# TBD: own lint table with unsafe_code = "deny" once the PTY spawn lands
-# (.rules/engineering.md, Lints). Workspace lints forbid unsafe until then.
-[lints]
-workspace = true
+# Test-only: journal state machine (.rules/verification.md).
+[dev-dependencies]
+proptest.workspace = true
+
+# Own lint table: the workspace set, except unsafe_code = "deny" so the single
+# PTY `pre_exec` site can carry #[allow(unsafe_code)] (.rules/engineering.md, Lints).
+# Keep in sync with [workspace.lints] in the root Cargo.toml.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "deny"
+unreachable_pub = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+let_underscore_must_use = "deny"
+large_futures = "deny"
+undocumented_unsafe_blocks = "deny"
+too_many_lines = "deny"

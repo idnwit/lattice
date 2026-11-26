@@ -12,8 +12,11 @@ bytes.workspace = true
 lattice-key.workspace = true
 lattice-relay-proto.workspace = true
 lattice-transport.workspace = true
+# rustls comes through `quinn::rustls` (same version and `ring` provider).
 quinn.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

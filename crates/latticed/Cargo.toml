@@ -1,6 +1,6 @@
 [package]
 name = "latticed"
-description = "Worker connectivity daemon: wires lattice-quic and the worker host."
+description = "Worker connectivity daemon: wires lattice-quic, the worker host, and the WASM package loader. Ships no app."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,13 +10,18 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+lattice-app.workspace = true
 lattice-key.workspace = true
+lattice-package.workspace = true
 lattice-quic.workspace = true
-lattice-transport.workspace = true
+lattice-wasm.workspace = true
 lattice-worker.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+lattice-builtin-apps.workspace = true
 
 [lints]
 workspace = true

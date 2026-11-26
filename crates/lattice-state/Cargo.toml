@@ -1,0 +1,20 @@
+[package]
+name = "lattice-state"
+description = "Synced data types for app state: Value, Map, List, #[derive(Synced)]; draft, commit, rollback, apply. No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lattice-state-macros.workspace = true
+postcard.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

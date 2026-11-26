@@ -7,5 +7,19 @@ rust-version.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lattice-app.workspace = true
+lattice-app-echo = { workspace = true, default-features = false, features = ["viewer"] }
+lattice-app-terminal = { workspace = true, default-features = false, features = ["viewer"] }
+lattice-builtin-apps.workspace = true
+lattice-deck-core.workspace = true
+lattice-key.workspace = true
+lattice-quic.workspace = true
+lattice-state.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
 [lints]
 workspace = true

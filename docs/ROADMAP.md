@@ -7,31 +7,35 @@ Owns: milestone order, milestone scope, and exit criteria. Behavior lives in [sp
 
 Four milestones, each one a working product slice:
 
-1. **M1** Platform frame and terminal app over a direct link.
+1. **M1** Platform frame, app instances, and the terminal app over a direct link.
 2. **M2** Relay, hole punching, real pairing, iOS deck.
 3. **M3** First coding agent: Claude Code.
-4. **M4** App and widget model on WASM, with node metrics as the first example.
+4. **M4** WASM runtime for runners and viewers, with node metrics as the first example.
 
 Each milestone ends with an end-to-end test of its exit criteria.
 Work order inside a milestone follows [architecture/09-platform-l1.md](architecture/09-platform-l1.md): bottom-up, one PR per crate or per sans-IO core.
 
-## M1 — Platform frame and terminal app, direct link
+## M1 — Platform frame, app instances, terminal app, direct link
 
-Goal: a macOS deck opens a shell on a worker over QUIC on plain UDP. Restarting `latticed` never kills the shell.
+Goal: a macOS deck creates a `terminal` app instance on a worker over QUIC on plain UDP. Restarting `latticed` never kills the shell and restores the instance.
+The instance model and create API ship here (D27). The `terminal` runner is native Rust behind the `Runner` trait; WASM arrives in M4.
 
 M1 is a temporary step away from D2 (relay first). The deck dials `ip:port` from the pairing payload. M2 restores D2.
 
 | # | Goal | Crates | Done when |
 |---|---|---|---|
-| M1.1 | Proc IPC v1 codec: TLV, `Hello`, spawn, write, resize, subscribe, gap, exit | `lattice-proc-ipc` | Its 6 contract tests pass. Golden v1 fixtures and a fuzz target exist |
-| M1.2 | Process daemon: PTYs, ring buffer, fan-out, poll loop, unix socket | `latticed-proc` | A test client spawns `sh`, writes, and reads back. Ring tests pass across the wrap. Proptest covers the ring |
+| M1.1 | Proc IPC v1 codec: TLV, `Hello`, journals (`Open`, `Trim`, `Drop`), spawn, write, resize, subscribe, gap, exit | `lattice-proc-ipc` | Its 6 contract tests pass. Golden v1 fixtures and a fuzz target exist |
+| M1.2 | Process daemon: PTYs, per-instance journals with budget and trim, fan-out, poll loop, unix socket | `latticed-proc` | A test client opens a journal, spawns `sh`, writes, and reads back. Journal tests pass across eviction and trim. Proptest covers the journal |
 | M1.3 | Sync wire: postcard frames with `u32` length, `Hello`, `Subscribe`, `Change`, `Action` | `lattice-sync-proto` | Its 3 contract tests pass, including split reads |
-| M1.4 | Local worker host: sessions, raw `Log` stream per PTY, `State` stream of processes, input and resize actions | `lattice-worker` | Its 4 contract tests pass against a real `latticed-proc`, with no network |
+| M1.4 | Local worker host: proc client, journal subscriptions, sessions, sync session to decks | `lattice-worker` | Its contract tests pass against a real `latticed-proc`, with no network |
+| M1.4a | App SDK: synced types and `#[derive(Synced)]` (copied from `realtime-workspace`). Done: laws and postcard roundtrips pass under proptest | `lattice-state`, `lattice-state-macros` | Type laws hold under proptest: apply after commit, rollback, one encoding |
+| M1.4b | Apps runner: `worker/apps`, `create`/`close`, params validation, state stream with a 1024-delta queue, native `terminal` app | `lattice-worker`, `lattice-sync-proto` | `create{terminal}` opens a journal and a shell. `close` waits for exit, then drops it. Two instances never read each other's state. A shell `exit` closes the instance |
+| M1.4c | Restore from journals: rebuild runners from `meta`, replay with effects dropped, `clear` trims, `Gap` marks `degraded` | `lattice-worker` | After a `latticed` restart every instance returns with the same `iid` and screen. Replay writes nothing to a PTY |
 | M1.5 | Direct-only transport: quinn on a plain UDP socket, TLS bound to the ed25519 node key, NodeId pinning | `lattice-quic`, `lattice-transport` | Two local processes echo on a bi stream. A wrong NodeId is refused |
 | M1.6 | One-shot pairing by QR or connection code | `lattice`, `latticed`, `lattice-worker`, `lattice-deck` | See [M1.6 pairing](#m16-pairing) |
-| M1.7 | Headless deck: worker link, session and pane model, `lattice attach` as a minimal terminal client | `lattice-deck-core`, `lattice` | A shell on worker B runs from machine A over a LAN |
+| M1.7 | Headless deck: worker link, session and pane model, create and close client, state subscriptions, `lattice attach` as a minimal terminal client | `lattice-deck-core`, `lattice` | A `terminal` instance on worker B is created and used from machine A over a LAN |
 | M1.8 | macOS deck: `DeckState` replaces fixtures; terminal widget, input, resize, worker status | `lattice-deck` | Tabs and split panes work. `vim` and `htop` render correctly |
-| M1.9 | Model proof: `latticed` restarts mid-session; the deck reconnects and replays from its offset | all | An end-to-end test shows the process survives. Output is complete, except ranges reported as a gap |
+| M1.9 | Model proof: `latticed` restarts mid-session; the instance restores; the deck reconnects and replays from its offset | all | An end-to-end test shows the process and its instance survive. Output is complete, except ranges reported as a gap |
 
 ### M1.6 pairing
 
@@ -64,16 +68,16 @@ From [architecture/09-platform-l1.md](architecture/09-platform-l1.md), plus pair
 - TBD: width of `ProcId` on the wire (u32 or u64)?
 - TBD: ring capacity per process?
 - TBD: sync frame byte order, max frame length, stream id charset?
-- TBD: raw `Log` seq to proc byte offset mapping?
 - TBD: canonical text form of a `NodeId`?
 - TBD: proc socket path on macOS?
 - TBD: M1 connection code encoding: base32 or base64url, and a prefix such as `lattice1:`?
 - TBD: does "show the code in the browser" mean a local web page served by `latticed`? M1 assumes terminal output only.
 - TBD: does M1 need `lattice unpair` to remove a deck?
+- TBD: default journal budget per instance?
 
 ### Out of scope for M1
 
-Relay, hole punching, PAKE, device list, content keys, iOS deck, WASM apps.
+Relay, hole punching, PAKE, device list, content keys, iOS deck, WASM runtime for runners and viewers.
 
 ## M2 — Relay and real connectivity
 
@@ -95,28 +99,28 @@ Done when: losing the direct path falls back to relay without dropping the sessi
 
 Goal: a Claude Code process on a worker shows as a TTY or Visual view, with approvals from the deck. Behavior: [specs/05-agents.md](specs/05-agents.md).
 
-1. Claude Code hooks feed an `events` stream on the worker.
+1. The deck creates a `coding_agent` instance (D23, D24). TBD: hook event capture, under D26 (restore only from `latticed-proc`).
 2. Our own status escape sequence (D17) reports agent state.
 3. TTY view embeds the `terminal` widget. Visual view shows plan, diffs, and approvals.
 4. Agents overview, run panel, and composer.
 
 - TBD: hook event schema for Claude Code?
 - TBD: does a Visual-mode message write into PTY stdin or a side channel?
-- TBD: where are "Always" approvals stored, and how are they revoked?
-- TBD: M3 before M4 means Claude Code ships as native host code, then ports to WASM in M4. D13 says built-in apps are WASM from v1. Swap M3 and M4?
+- TBD: where are "Always" approvals stored, and how are they revoked? D25 rules out shared app data.
+- TBD: M3 before M4 means the Claude Code runner ships native behind the `Runner` trait, then ports to WASM in M4. Swap M3 and M4?
 
-## M4 — App and widget model (WASM)
+## M4 — WASM runtime for runners and viewers
 
-Goal: an app has a worker part and a view part, both WASM. The `metrics` app proves the model. Design: [architecture/06-apps.md](architecture/06-apps.md).
+Goal: runners and viewers run as WASM, one sandbox per instance (D25). The `metrics` app proves the model. Design: [architecture/06-apps.md](architecture/06-apps.md).
 
 1. WIT world `lattice:app@1`, `app.toml` manifest, permissions.
-2. Worker app host: wasmtime, epoch deadlines, `ResourceLimiter`.
+2. Worker WASM host behind the `Runner` trait: wasmtime, one `Store` per instance, epoch deadlines, `ResourceLimiter`.
 3. Deck app host: wasmtime on macOS. iOS uses an interpreter (decisions.md Q6).
 4. View tree to NSH interpreter (D14) and the v1 host widget set.
 5. `Series` stream kind for metrics.
-6. `metrics` app: the worker part samples CPU, memory, and GPU; the view part renders charts.
+6. `metrics` app: an instance with no process. The runner samples CPU, memory, and GPU; the viewer renders charts.
 7. `lattice app build`, `lattice app install`, `lattice app reload`.
-8. Port the built-in `terminal` app to WASM. Port Claude Code too, if M3 shipped it native.
+8. Port the native `terminal` runner to WASM. Port Claude Code too, if M3 shipped it native.
 
 - TBD: WIT world v1 host widget set and versioning scheme (decisions.md Q7)?
 - TBD: wasmtime component model with WASI 0.3 on worker and deck (decisions.md Q8)?

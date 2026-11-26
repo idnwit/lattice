@@ -22,7 +22,7 @@ Adapted from luvox `VERIFICATION.md` and `formal-verification.md`, scaled down.
 | Relay codec and demux ([01](../docs/architecture/01-transport.md)) | No panic on any bytes. `0x00–0x3F` relay vs QUIC split is right. Roundtrip | fuzz, proptest roundtrip | first codec |
 | Relay token table (01) | `SEND` accepted only from the token's bound address. Expiry honored | Kani inductive step | planned, once `stable` |
 | `latticed-proc` IPC TLV ([04](../docs/architecture/04-worker.md)) | No panic on frames. Unknown tag ignored. Unknown type gives `Error{unsupported}` | fuzz, golden v1 fixtures | first codec |
-| Ring buffer and fan-out (04) | `start_off ≤ end_off`. `Gap` exactly when evicted. Slow subscriber never blocks | proptest state machine | first code |
+| Journal and fan-out (04) | `start_off ≤ end_off`. Kept bytes ≤ budget. Offsets only grow across `Trim`. `Gap` exactly when dropped. Slow subscriber never blocks | proptest state machine | first code |
 | Sync log validation ([02](../docs/architecture/02-sync.md)) | `seq` contiguous, `prev_hash` chain holds, signature checked | fuzz decoder, proptest | first code |
 | Snapshot and compaction (02) | `fold(snapshot + tail) == fold(all)`. Resume loses and duplicates nothing | proptest oracle; Stateright 2–3 nodes | Stateright planned |
 | `Doc` / Loro (02) | Any order or duplication of writer logs converges | proptest permutations | first code |
