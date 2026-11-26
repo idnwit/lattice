@@ -70,15 +70,20 @@ fn keepalive_every_25_seconds_after_registration() {
 }
 
 #[test]
-fn register_signs_relay_id_nonce_and_ts() {
+fn register_signs_relay_id_nonce_ts_and_cookie() {
     let (relay, node) = (id(0), node(1));
+    let mut c = RelayClient::new(relay);
     let mut out = Vec::new();
-    RelayClient::new(relay).register(&node, [7; 16], 42, &mut out);
+    c.register(&node, [1; 16], 42, &mut out);
+    c.on_datagram(Duration::ZERO, &cookie_msg([9; 16], [1; 16]));
+    out.clear();
+    c.register(&node, [7; 16], 42, &mut out);
     let Ok(RelayMsg::Register {
         node_id,
         nonce,
         ts,
         sig,
+        cookie,
     }) = crate::decode(&out)
     else {
         panic!("expected REGISTER");
@@ -86,7 +91,8 @@ fn register_signs_relay_id_nonce_and_ts() {
     let mut signed = relay.as_bytes().to_vec();
     signed.extend_from_slice(&nonce);
     signed.extend_from_slice(&ts.to_be_bytes());
-    assert_eq!((node_id, ts), (node.node_id(), 42));
+    signed.extend_from_slice(&cookie);
+    assert_eq!((node_id, ts, cookie), (node.node_id(), 42, [9; 16]));
     assert_eq!(node_id.verify(&signed, &sig), Ok(()));
 }
 
@@ -209,4 +215,98 @@ fn recv_yields_the_packet_range() {
         panic!("expected Packet");
     };
     assert_eq!((src, wire.get(packet)), (id(1), Some(&[0x40, 7, 8][..])));
+}
+
+fn cookie_msg(cookie: [u8; 16], nonce: [u8; 16]) -> Vec<u8> {
+    let mut wire = Vec::new();
+    encode(&RelayMsg::Cookie { cookie, nonce }, &mut wire);
+    wire
+}
+
+fn cookie_in(register: &[u8]) -> Option<[u8; 16]> {
+    match crate::decode(register) {
+        Ok(RelayMsg::Register { cookie, .. }) => Some(cookie),
+        _ => None,
+    }
+}
+
+/// Rule 22.
+#[test]
+fn a_cookie_for_the_last_register_is_used_at_once() {
+    let mut c = RelayClient::new(id(0));
+    let mut out = Vec::new();
+    assert!(c.poll_register(Duration::ZERO));
+    c.register(&node(1), [1; 16], 1, &mut out);
+    assert_eq!(cookie_in(&out), Some([0; 16]), "no cookie yet");
+    let t = Duration::from_millis(40);
+    assert_eq!(
+        c.on_datagram(t, &cookie_msg([9; 16], [2; 16])),
+        None,
+        "not our nonce"
+    );
+    assert_eq!(
+        c.on_datagram(t, &cookie_msg([9; 16], [1; 16])),
+        Some(ClientEvent::RegisterDue)
+    );
+    assert_eq!(
+        c.next_deadline(),
+        Some(Duration::ZERO),
+        "due now, not after the retry"
+    );
+    assert!(c.poll_register(t));
+    out.clear();
+    c.register(&node(1), [2; 16], 1, &mut out);
+    assert_eq!(cookie_in(&out), Some([9; 16]));
+}
+
+/// Rule 22, registered: a rebind's `REGISTER` gets a `COOKIE`; the next one is due at once,
+/// not after [`REGISTER_RETRY`], and the token stays until its `REG_OK`.
+#[test]
+fn a_cookie_while_registered_reregisters_at_once() {
+    let mut c = RelayClient::new(id(0));
+    sent(&mut c, NONCE);
+    c.on_datagram(Duration::ZERO, &reg_ok(NONCE, 1));
+    let t = Duration::from_secs(30);
+    c.on_datagram(t, &pong(4001));
+    assert!(c.poll_register(t));
+    let mut out = Vec::new();
+    c.register(&node(1), [2; 16], 1, &mut out);
+    let t1 = t + Duration::from_millis(40);
+    assert_eq!(
+        c.on_datagram(t1, &cookie_msg([9; 16], [2; 16])),
+        Some(ClientEvent::RegisterDue)
+    );
+    assert!(
+        c.next_deadline() <= Some(t1),
+        "due now, not after the retry"
+    );
+    assert!(c.poll_register(t1));
+    assert!(c.is_registered(), "the token stays");
+    out.clear();
+    c.register(&node(1), [3; 16], 1, &mut out);
+    assert_eq!(cookie_in(&out), Some([9; 16]));
+    c.on_datagram(t1, &reg_ok([3; 16], 2));
+    assert_eq!(token_of(&c), Some(Token::from_bytes([2; 8])));
+}
+
+/// Rule 22: a duplicate `COOKIE` for a `REGISTER` already answered costs nothing.
+#[test]
+fn a_duplicate_cookie_is_ignored() {
+    let mut c = RelayClient::new(id(0));
+    let mut out = Vec::new();
+    assert!(c.poll_register(Duration::ZERO));
+    c.register(&node(1), [1; 16], 1, &mut out);
+    let first = cookie_msg([9; 16], [1; 16]);
+    assert_eq!(
+        c.on_datagram(Duration::ZERO, &first),
+        Some(ClientEvent::RegisterDue)
+    );
+    assert!(c.poll_register(Duration::ZERO));
+    c.register(&node(1), [2; 16], 1, &mut out);
+    let t = Duration::from_millis(40);
+    assert_eq!(c.on_datagram(t, &first), None, "duplicate");
+    assert!(!c.poll_register(t), "no extra REGISTER");
+    out.clear();
+    c.register(&node(1), [3; 16], 1, &mut out);
+    assert_eq!(cookie_in(&out), Some([9; 16]), "the cookie is kept");
 }

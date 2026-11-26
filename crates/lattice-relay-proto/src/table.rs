@@ -73,6 +73,16 @@ impl TokenTable {
         );
     }
 
+    /// True when `node` has a registration, live or not yet expired out.
+    pub(crate) fn knows(&self, node: NodeId) -> bool {
+        self.by_node.contains_key(&node)
+    }
+
+    /// Registered nodes.
+    pub(crate) fn nodes(&self) -> usize {
+        self.by_node.len()
+    }
+
     /// The registration for `token`, only when `src` is its bound address (anti-spoof).
     ///
     /// Compares IP and port only: IPv6 flow info may change between datagrams.

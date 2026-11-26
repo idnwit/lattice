@@ -1876,6 +1876,7 @@ dependencies = [
 name = "lattice-relay-proto"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "lattice-key",
  "proptest",
 ]

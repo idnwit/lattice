@@ -17,12 +17,13 @@ fn unix_secs() -> u64 {
 async fn spawn_relay(relay: &NodeKey) -> SocketAddr {
     let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let addr = sock.local_addr().unwrap();
-    let engine = RelayEngine::new(relay.node_id(), DEFAULT_TTL);
-    tokio::spawn(async move { serve(sock, engine).await });
+    let engine = RelayEngine::new(relay.node_id(), DEFAULT_TTL, [7; 32]);
+    let tokens = TokenSource::open().unwrap();
+    tokio::spawn(async move { serve(sock, engine, tokens).await });
     addr
 }
 
-/// A node socket registered at `relay`.
+/// A node socket registered at `relay`: REGISTER, COOKIE, REGISTER with the cookie, REG_OK.
 async fn registered(
     relay: SocketAddr,
     relay_key: &NodeKey,
@@ -30,15 +31,21 @@ async fn registered(
 ) -> (UdpSocket, RelayClient) {
     let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let mut client = RelayClient::new(relay_key.node_id());
-    let mut out = Vec::new();
-    client.register(
-        node,
-        [node.node_id().as_bytes()[0]; 16],
-        unix_secs(),
-        &mut out,
-    );
-    sock.send_to(&out, relay).await.unwrap();
     let mut buf = [0u8; 2048];
+    let seed = node.node_id().as_bytes()[0];
+
+    // Rule 18: the first REGISTER carries no cookie and gets a COOKIE.
+    let mut out = Vec::new();
+    client.register(node, [seed; 16], unix_secs(), &mut out);
+    sock.send_to(&out, relay).await.unwrap();
+    let n = recv(&sock, &mut buf).await;
+    let event = client.on_datagram(Duration::ZERO, &buf[..n]);
+    assert_eq!(event, Some(ClientEvent::RegisterDue), "expected COOKIE");
+
+    // Rule 22: register again at once, with the cookie and a new nonce.
+    out.clear();
+    client.register(node, [seed.wrapping_add(1); 16], unix_secs(), &mut out);
+    sock.send_to(&out, relay).await.unwrap();
     let n = recv(&sock, &mut buf).await;
     let event = client.on_datagram(Duration::ZERO, &buf[..n]);
     let Some(ClientEvent::Registered { observed }) = event else {

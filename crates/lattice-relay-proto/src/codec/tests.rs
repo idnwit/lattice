@@ -23,8 +23,10 @@ fn keepalive_roundtrips() {
     };
     let mut wire = Vec::new();
     encode(&msg, &mut wire);
-    assert_eq!(wire.len(), 9);
+    assert_eq!(wire.len(), 19, "as long as a PONG (rule 23)");
     assert_eq!(decode(&wire), Ok(msg));
+    wire.truncate(18);
+    assert_eq!(decode(&wire), Err(CodecError::Truncated), "short of a PONG");
 }
 
 #[test]
@@ -79,6 +81,7 @@ fn every_message_has_its_spec_layout() {
                 nonce: [7; 16],
                 ts: 0x0102_0304_0506_0708,
                 sig,
+                cookie: [4; 16],
             },
             cat(&[
                 &[0x01],
@@ -86,7 +89,16 @@ fn every_message_has_its_spec_layout() {
                 &[7; 16],
                 &[1, 2, 3, 4, 5, 6, 7, 8],
                 &[0x55; 64],
+                &[4; 16],
             ]),
+        ),
+        (
+            "cookie",
+            RelayMsg::Cookie {
+                cookie: [4; 16],
+                nonce: [7; 16],
+            },
+            cat(&[&[0x05], &[4; 16], &[7; 16]]),
         ),
         (
             "reg_ok",
@@ -101,7 +113,7 @@ fn every_message_has_its_spec_layout() {
         (
             "keepalive",
             RelayMsg::Keepalive { token: tok },
-            cat(&[&[0x03], &[0xAA; 8]]),
+            cat(&[&[0x03], &[0xAA; 8], &[0; 10]]),
         ),
         (
             "pong",
@@ -152,6 +164,8 @@ fn every_message_has_its_spec_layout() {
     }
     assert_eq!(SEND_HEADER_LEN, 1 + 8 + 32);
     assert_eq!(RECV_HEADER_LEN, 1 + 32);
+    // Rule 21: COOKIE never outweighs the REGISTER it answers.
+    assert_eq!((1 + 16 + 16, 1 + 32 + 16 + 8 + 64 + 16), (33, 137));
 }
 
 #[test]

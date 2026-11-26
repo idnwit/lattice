@@ -30,6 +30,8 @@ pub enum ClientEvent {
         /// Byte range of the QUIC packet in the input datagram.
         packet: Range<usize>,
     },
+    /// `COOKIE`: a `REGISTER` with the new cookie is due now (rule 22).
+    RegisterDue,
     /// `PUNCH_GO`: start probing `peer`.
     PunchGo {
         /// Peer to probe.
@@ -54,6 +56,8 @@ pub struct RelayClient {
     state: State,
     /// Nonce of the last `REGISTER` built; only its `REG_OK` is accepted (rule 15).
     pending: Option<[u8; 16]>,
+    /// Cookie for the next `REGISTER`; all-zero until the relay sends one (rules 18, 22).
+    cookie: [u8; 16],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,6 +84,7 @@ impl RelayClient {
             relay_id,
             state: State::Unregistered { retry_at: None },
             pending: None,
+            cookie: [0; 16],
         }
     }
 
@@ -92,13 +97,14 @@ impl RelayClient {
     /// Only the `REG_OK` echoing this `nonce` is accepted afterwards (rule 15).
     pub fn register(&mut self, key: &NodeKey, nonce: [u8; 16], ts: u64, out: &mut Vec<u8>) {
         self.pending = Some(nonce);
-        let sig = key.sign(&register_signed(self.relay_id, nonce, ts));
+        let sig = key.sign(&register_signed(self.relay_id, nonce, ts, self.cookie));
         encode(
             &RelayMsg::Register {
                 node_id: key.node_id(),
                 nonce,
                 ts,
                 sig,
+                cookie: self.cookie,
             },
             out,
         );
@@ -147,6 +153,7 @@ impl RelayClient {
                 Some(ClientEvent::Registered { observed })
             }
             RelayMsg::Pong { observed: seen } => self.on_pong(now, seen),
+            RelayMsg::Cookie { cookie, nonce } => self.on_cookie(now, cookie, nonce),
             RelayMsg::Recv { src, .. } => Some(ClientEvent::Packet {
                 src,
                 packet: RECV_HEADER_LEN..bytes.len(),
@@ -203,6 +210,24 @@ impl RelayClient {
                 rebind_at.map_or(due, |at| due.min(at))
             }
         })
+    }
+
+    /// Rule 22: keep the cookie and make a `REGISTER` due now.
+    fn on_cookie(
+        &mut self,
+        now: Duration,
+        cookie: [u8; 16],
+        nonce: [u8; 16],
+    ) -> Option<ClientEvent> {
+        if self.pending != Some(nonce) {
+            return None;
+        }
+        self.cookie = cookie;
+        match &mut self.state {
+            State::Unregistered { retry_at } => *retry_at = None,
+            State::Registered { rebind_at, .. } => *rebind_at = Some(now),
+        }
+        Some(ClientEvent::RegisterDue)
     }
 
     fn on_pong(&mut self, now: Duration, seen: ObservedAddr) -> Option<ClientEvent> {
