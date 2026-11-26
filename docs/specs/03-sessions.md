@@ -71,6 +71,14 @@ TBD: design canvas and simulator update for the app picker and the mobile region
 - TBD: `TermState` carries no terminal modes (application cursor keys, bracketed paste, mouse). Should it, so attach and the deck can mirror them?
 - TBD: should attach show scrollback? It shows the screen only.
 
+## Probe (CLI, M1 experiment)
+
+`lattice probe [<command>] [--exit] [--iid <iid>]` checks a worker end to end without a GUI (ROADMAP M1.8).
+
+1. A new instance starts in the worker's default cwd, like attach (rule 4). The deck never sends a path from its own machine.
+2. The probe subscribes to `worker/apps`. When its instance shows `failed` there, it prints `instance.failed` with the iid and exits with code 1.
+3. Otherwise it types `<command>` (and `exit` with `--exit`), prints the screen it received, and exits with code 0.
+
 ## Data
 
 | Session field | Example |
