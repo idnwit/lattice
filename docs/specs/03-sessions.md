@@ -69,6 +69,8 @@ TBD: design canvas and simulator update for the app picker and the mobile region
 14. Cell colors pass through as SGR codes: indexed colors as indexed, true colors as true colors. The local terminal theme sets the hues.
 15. Control characters in cell text are drawn as spaces. Instance state is untrusted network input.
 16. Rows past the local height are not drawn.
+17. An instance in phase `failed` in `worker/apps` ends the attach. The client prints `instance.failed (instance <iid>)` and exits with code 1. It never closes the instance (Behavior 18).
+18. The client reads the first `worker/apps` state before it enters raw mode. A `--iid` that is missing (rule 2) or `failed` there exits without raw mode. A failure seen later exits through rule 12.
 
 - TBD: is `Ctrl-\` the final detach key? Should a flag change it, and how does the user send a literal `Ctrl-\`?
 - TBD: `TermState` carries no terminal modes (application cursor keys, bracketed paste, mouse). Should it, so attach and the deck can mirror them?
