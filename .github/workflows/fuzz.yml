@@ -1,0 +1,25 @@
+name: fuzz
+
+# Nightly, outside ci-ok (.rules/verification.md, CI): 5 minutes per target.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proc-ipc-decode:
+    name: proc_ipc_decode
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - name: fuzz 5 min
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/proc_ipc_decode
+          cargo fuzz run proc_ipc_decode corpus/proc_ipc_decode \
+            ../crates/lattice-proc-ipc/tests/fixtures -- -max_total_time=300
