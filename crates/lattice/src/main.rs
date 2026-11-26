@@ -15,12 +15,17 @@
 //! (printing the `Size` it returns), types a command, and prints the screen
 //! state it receives. Proves deck ⇄ runner ⇄ proc end to end without a GUI.
 //!
+//! `lattice attach`: a `terminal` instance in the local terminal (specs/03-sessions.md,
+//! Attach). Creates one, or `--iid` attaches to an existing one. `Ctrl-\` detaches.
+//!
 //! `lattice probe-echo`: creates an `echo` instance, sends one line through the
 //! typed client, and prints the returned seq and the lines it receives as state.
 //! Proves an app with no process end to end (D40).
 
 // Binaries may print (.rules/engineering.md, Lints).
 #![allow(clippy::print_stdout)]
+
+mod attach;
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -72,6 +77,12 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Attach the local terminal to a terminal instance on the worker. `Ctrl-\` detaches.
+    Attach {
+        /// Attach to this existing instance instead of creating one.
+        #[arg(long)]
+        iid: Option<u64>,
+    },
     /// Open a terminal on the worker, run `command`, print the screen.
     Probe {
         /// Command typed into the shell.
@@ -102,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Invite { name } => invite(name).await,
         Cmd::AddDeck { invite, name } => add_deck(&invite, name),
+        Cmd::Attach { iid } => attach::attach(worker, iid).await,
         Cmd::Probe { command, exit, iid } => probe(worker, &command, exit, iid).await,
         Cmd::ProbeEcho { text } => probe_echo(worker, &text).await,
     }

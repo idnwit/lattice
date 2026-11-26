@@ -18,7 +18,10 @@ lattice-deck-core.workspace = true
 lattice-key.workspace = true
 lattice-quic.workspace = true
 lattice-state.workspace = true
-tokio.workspace = true
+# `lattice attach`: raw mode and window size of the local TTY (safe termios API).
+rustix.workspace = true
+# `signal`: SIGWINCH for `lattice attach`; `io-std`, `io-util`: its screen output.
+tokio = { workspace = true, features = ["signal", "io-std", "io-util"] }
 tracing-subscriber.workspace = true
 
 [lints]
