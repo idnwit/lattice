@@ -71,6 +71,8 @@ impl Transport for FakeTransport {
     fn local_id(&self) -> NodeId {
         self.local
     }
+
+    async fn shutdown(&self) {}
 }
 
 impl Conn for FakeConn {

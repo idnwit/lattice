@@ -18,6 +18,13 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 /// Code 0 stays the generic close.
 const CLOSE_REFUSED: quinn::VarInt = quinn::VarInt::from_u32(1);
 
+/// The generic close: what [`Transport::shutdown`] sends.
+const CLOSE_GENERIC: quinn::VarInt = quinn::VarInt::from_u32(0);
+
+/// Longest wait of [`Transport::shutdown`] for the peers to be told (01-transport.md,
+/// Transport trait rule 3; proposed).
+const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// A bound node: one UDP socket and one quinn endpoint.
 ///
 /// Relay mode also runs relay registration (skeleton). Direct mode dials
@@ -76,6 +83,21 @@ impl QuicTransport {
         // Endpoint::new_with_abstract_socket(..); spawn relay register + keepalive task
         // connect: virtual_addr(peer); PUNCH_REQ → probes → PathSelector (connect sequence 4–5)
         todo!()
+    }
+
+    /// [`Transport::shutdown`], callable without the trait (binaries that only bind).
+    ///
+    /// Closes every connection with the generic close, then waits for the peers to be told,
+    /// at most `SHUTDOWN_WAIT` (01-transport.md, Transport trait rules 3–4).
+    pub async fn shutdown(&self) {
+        // Connections closed before (refused) keep their code: quinn sends each close once.
+        self.endpoint.close(CLOSE_GENERIC, b"shutdown");
+        if tokio::time::timeout(SHUTDOWN_WAIT, self.endpoint.wait_idle())
+            .await
+            .is_err()
+        {
+            tracing::debug!("shutdown: peers not told within the wait");
+        }
     }
 
     /// Records where `peer` listens. Direct mode dials only known peers.
@@ -177,6 +199,10 @@ impl Transport for QuicTransport {
 
     fn local_id(&self) -> NodeId {
         self.local_id
+    }
+
+    async fn shutdown(&self) {
+        QuicTransport::shutdown(self).await;
     }
 }
 

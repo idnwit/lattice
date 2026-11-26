@@ -99,6 +99,8 @@ impl Transport for Workers {
     fn local_id(&self) -> NodeId {
         id(1)
     }
+
+    async fn shutdown(&self) {}
 }
 
 impl Conn for Accepted {

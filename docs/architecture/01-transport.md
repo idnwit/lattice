@@ -109,6 +109,7 @@ trait Transport {
     async fn connect(&self, peer: NodeId) -> Result<Conn>;
     async fn accept(&self) -> Result<(NodeId, Conn)>;
     fn local_id(&self) -> NodeId;
+    async fn shutdown(&self);
 }
 trait Conn {
     async fn open_bi(&self) -> Result<(Send, Recv)>;
@@ -124,6 +125,8 @@ Nothing above L1 imports `quinn` types.
 
 1. Dropping a `Conn` does not close it: the transport keeps the connection for reuse (D4). A host ends one on purpose with `close(reason)`.
 2. `close(CloseReason::Refused)` closes the connection at once with an application close code. Every stream the peer has on it fails with `transport.refused`.
+3. `shutdown()` closes every open connection with the generic close code, then waits until each peer was told, at most `SHUTDOWN_WAIT` = 1 s (proposed). A connection closed before keeps its close code.
+4. A process calls `shutdown()` before it exits. Without it, packets still queued are never sent: a peer misses a stream's finish or the close, and waits for its idle timeout.
 
 ## Mobile (iOS)
 

@@ -221,3 +221,64 @@ async fn a_refused_peer_fails_with_refused_instead_of_hanging() {
     assert_eq!(got, Err(TransportError::Refused));
     assert_eq!(TransportError::Refused.code(), "transport.refused");
 }
+
+/// Runs `work` on its own single-thread runtime and drops the runtime as soon as `work`
+/// returns, as a process exit does: tasks still due never run again.
+fn run_and_exit<F: std::future::Future<Output = ()>>(work: impl FnOnce() -> F + Send + 'static) {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(work());
+    });
+}
+
+#[tokio::test]
+async fn a_shutdown_before_exit_tells_the_peer_at_once() {
+    // 01-transport.md, Transport trait rules 3–4; specs/01-pairing.md rule 9.
+    let deck = node(2).await;
+    let deck_id = deck.local_id();
+    let deck_addr = deck.local_addr().unwrap();
+    run_and_exit(move || async move {
+        let worker = node(1).await;
+        worker.add_peer(deck_id, deck_addr);
+        let conn = worker.connect(deck_id).await.unwrap();
+        let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+        tx.write_all(b"hello").await.unwrap();
+        // The deck's reply: the stream is up both ways. Only the finish is left to send.
+        let mut ack = [0u8; 3];
+        let mut got = 0;
+        while got < ack.len() {
+            got += rx.read(&mut ack[got..]).await.unwrap().unwrap();
+        }
+        tx.finish().unwrap();
+        worker.shutdown().await;
+    });
+
+    let (_, conn) = tokio::time::timeout(STEP, deck.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let (mut tx, mut rx) = tokio::time::timeout(STEP, conn.accept_bi())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut buf = [0u8; 64];
+    let mut got = 0;
+    while got < 5 {
+        got += rx.read(&mut buf).await.unwrap().unwrap();
+    }
+    tx.write_all(b"ack").await.unwrap();
+    let started = tokio::time::Instant::now();
+    let end = async {
+        // The finish, or the close: either one ends the stream for the deck.
+        while let Ok(Some(_)) = rx.read(&mut buf).await {}
+    };
+    let ended = tokio::time::timeout(Duration::from_secs(2), end).await;
+    assert!(
+        ended.is_ok(),
+        "the deck still waits after {:?}: the end never left the worker",
+        started.elapsed()
+    );
+}

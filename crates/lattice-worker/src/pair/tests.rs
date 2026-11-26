@@ -33,10 +33,18 @@ fn card() -> WorkerCard {
 /// How the one connection was closed, if it was.
 type Closed = Arc<Mutex<Option<CloseReason>>>;
 
+/// Finished streams the transport has not sent yet: `Some` until `shutdown` sends them.
+/// Models a process exit, which drops what is still queued (01-transport.md rule 4).
+type Outbox = Arc<Mutex<Option<Vec<DuplexStream>>>>;
+
+fn outbox() -> Outbox {
+    Arc::new(Mutex::new(Some(Vec::new())))
+}
+
 /// Dials one scripted deck: worker → deck and deck → worker are separate pipes.
-struct OneDial(Mutex<Option<(DuplexStream, DuplexStream)>>, Closed);
-struct Dialed(Mutex<Option<(DuplexStream, DuplexStream)>>, Closed);
-struct PipeSend(Option<DuplexStream>);
+struct OneDial(Mutex<Option<(DuplexStream, DuplexStream)>>, Closed, Outbox);
+struct Dialed(Mutex<Option<(DuplexStream, DuplexStream)>>, Closed, Outbox);
+struct PipeSend(Option<DuplexStream>, Outbox);
 struct Recv(DuplexStream);
 
 impl Transport for OneDial {
@@ -45,7 +53,7 @@ impl Transport for OneDial {
     async fn connect(&self, peer: NodeId) -> Result<Dialed, TransportError> {
         assert_eq!(peer, id(2), "dials the invite's deck");
         let pipes = self.0.lock().unwrap().take();
-        Ok(Dialed(Mutex::new(pipes), self.1.clone()))
+        Ok(Dialed(Mutex::new(pipes), self.1.clone(), self.2.clone()))
     }
 
     async fn accept(&self) -> Result<(NodeId, Dialed), TransportError> {
@@ -54,6 +62,11 @@ impl Transport for OneDial {
 
     fn local_id(&self) -> NodeId {
         id(1)
+    }
+
+    async fn shutdown(&self) {
+        // Sends what is queued: the deck reads EOF on every finished stream.
+        self.2.lock().unwrap().take();
     }
 }
 
@@ -68,7 +81,7 @@ impl Conn for Dialed {
             .unwrap()
             .take()
             .ok_or(TransportError::Closed)?;
-        Ok((PipeSend(Some(w)), Recv(r)))
+        Ok((PipeSend(Some(w), self.2.clone()), Recv(r)))
     }
 
     async fn accept_bi(&self) -> Result<(PipeSend, Recv), TransportError> {
@@ -108,8 +121,12 @@ impl SendStream for PipeSend {
     }
 
     fn finish(&mut self) -> Result<(), TransportError> {
-        // Dropping the writer ends the pipe: the deck reads EOF.
-        self.0.take().map(drop).ok_or(TransportError::Closed)
+        // Queued: the deck reads EOF only once `shutdown` sends it (or right away after one).
+        let w = self.0.take().ok_or(TransportError::Closed)?;
+        if let Some(queue) = self.1.lock().unwrap().as_mut() {
+            queue.push(w);
+        }
+        Ok(())
     }
 }
 
@@ -176,7 +193,9 @@ async fn deck(
         After::Confirm => {
             drop(to_worker);
             let mut buf = [0u8; 16];
-            worker_finished = from_worker.read(&mut buf).await.unwrap() == 0;
+            // A finish the worker never sent leaves the deck waiting: give up after 1 s.
+            let read = tokio::time::timeout(Duration::from_secs(1), from_worker.read(&mut buf));
+            worker_finished = matches!(read.await, Ok(Ok(0)));
         }
         After::Stall => std::future::pending::<()>().await,
         After::Garble => to_worker.write_all(b"x").await.unwrap(),
@@ -201,11 +220,16 @@ async fn run(
     reply: Message,
     after: After,
     path: &Path,
-) -> (Result<PairedDeck, PairError>, Option<Seen>, Closed) {
+) -> (Result<PairedDeck, PairError>, Option<Seen>, Closed, Outbox) {
     let (worker_w, deck_r) = tokio::io::duplex(4096);
     let (deck_w, worker_r) = tokio::io::duplex(4096);
     let closed = Closed::default();
-    let transport = OneDial(Mutex::new(Some((worker_w, worker_r))), closed.clone());
+    let queued = outbox();
+    let transport = OneDial(
+        Mutex::new(Some((worker_w, worker_r))),
+        closed.clone(),
+        queued.clone(),
+    );
     let deck = tokio::spawn(deck(deck_r, deck_w, reply, after));
     let res = add_deck(&transport, &invite(), &card(), path, NOW).await;
     let seen = if after == After::Stall {
@@ -214,7 +238,7 @@ async fn run(
     } else {
         deck.await.ok()
     };
-    (res, seen, closed)
+    (res, seen, closed, queued)
 }
 
 fn ok() -> Message {
@@ -231,7 +255,7 @@ fn listed(path: &Path) -> bool {
 async fn pair_ok_writes_the_allowlist_then_confirms_with_pair_done() {
     let dir = scratch("ok");
     let path = dir.join("decks");
-    let (res, seen, closed) = run(ok(), After::Confirm, &path).await;
+    let (res, seen, closed, queued) = run(ok(), After::Confirm, &path).await;
     let want = PairedDeck {
         id: id(2),
         name: "minh-mbp".to_owned(),
@@ -251,6 +275,7 @@ async fn pair_ok_writes_the_allowlist_then_confirms_with_pair_done() {
         None,
         "a paired exchange is not refused"
     );
+    assert!(queued.lock().unwrap().is_none(), "rule 9: shut down");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -259,7 +284,7 @@ async fn pair_ok_writes_the_allowlist_then_confirms_with_pair_done() {
 async fn allowlist_survives_latticed_restart() {
     let dir = scratch("restart");
     let path = dir.join("decks");
-    let (res, _, _) = run(ok(), After::Confirm, &path).await;
+    let (res, _, _, _) = run(ok(), After::Confirm, &path).await;
     res.unwrap();
     for start in ["first start", "after a restart"] {
         let policy = PeerPolicy::allow_file(path.clone());
@@ -276,12 +301,16 @@ async fn a_denied_pairing_shows_the_deck_code_and_writes_nothing() {
     let denied = Message::PairDenied {
         code: "pair.bad_secret".to_owned(),
     };
-    let (res, seen, closed) = run(denied, After::Hang, &path).await;
+    let (res, seen, closed, queued) = run(denied, After::Hang, &path).await;
     let err = res.unwrap_err();
     assert_eq!(err.code(), "pair.bad_secret");
     assert!(!seen.unwrap().done);
     assert!(!path.exists());
     assert_eq!(*closed.lock().unwrap(), Some(CloseReason::Refused));
+    assert!(
+        queued.lock().unwrap().is_none(),
+        "rule 10: the refusal is sent"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -289,7 +318,7 @@ async fn a_denied_pairing_shows_the_deck_code_and_writes_nothing() {
 async fn a_failed_allowlist_write_sends_no_pair_done() {
     let dir = scratch("unwritable");
     let path = dir.join("missing").join("decks");
-    let (res, seen, closed) = run(ok(), After::Hang, &path).await;
+    let (res, seen, closed, _) = run(ok(), After::Hang, &path).await;
     assert_eq!(res.unwrap_err().code(), "pair.allowlist");
     assert!(!seen.unwrap().done, "the deck must not save this worker");
     assert_eq!(*closed.lock().unwrap(), Some(CloseReason::Refused));
@@ -301,7 +330,7 @@ async fn a_failed_allowlist_write_sends_no_pair_done() {
 async fn a_stalled_deck_times_out_and_the_allowlist_line_stays() {
     let dir = scratch("stall");
     let path = dir.join("decks");
-    let (res, _, closed) = run(ok(), After::Stall, &path).await;
+    let (res, _, closed, _) = run(ok(), After::Stall, &path).await;
     assert_eq!(res, Err(PairError::Timeout));
     assert!(listed(&path), "rule 10: no rollback");
     assert_eq!(*closed.lock().unwrap(), Some(CloseReason::Refused));
@@ -312,7 +341,7 @@ async fn a_stalled_deck_times_out_and_the_allowlist_line_stays() {
 async fn a_deck_that_does_not_finish_cleanly_is_unconfirmed() {
     let dir = scratch("garble");
     let path = dir.join("decks");
-    let (res, seen, closed) = run(ok(), After::Garble, &path).await;
+    let (res, seen, closed, _) = run(ok(), After::Garble, &path).await;
     assert_eq!(res, Err(PairError::Unconfirmed));
     assert!(seen.unwrap().done);
     assert_eq!(*closed.lock().unwrap(), Some(CloseReason::Refused));
@@ -323,7 +352,7 @@ async fn a_deck_that_does_not_finish_cleanly_is_unconfirmed() {
 async fn expired_pair_secret_is_denied_before_dialing() {
     let dir = scratch("expired");
     let path = dir.join("decks");
-    let transport = OneDial(Mutex::new(None), Closed::default());
+    let transport = OneDial(Mutex::new(None), Closed::default(), outbox());
     let late = invite().expires();
     let res = add_deck(&transport, &invite(), &card(), &path, late).await;
     assert_eq!(res, Err(PairError::Expired));

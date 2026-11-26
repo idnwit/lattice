@@ -24,14 +24,15 @@ Both sides end up holding the other's public key, each learned over a channel th
 8. Any other secret gets `PairDenied{code}` (`pair.bad_secret`, `pair.expired`, `pair.used`). The deck waits for the worker to end its stream, then closes the connection as refused. The invite stays open after `pair.bad_secret`.
 9. On `PairOk` the worker adds the deck NodeId and name to its allowlist and syncs the file to disk. Then it sends `PairDone` and waits.
    - On `PairDone` the deck saves the worker (NodeId, `ip:port`, name) to its worker list, then finishes its stream.
-   - The worker reports paired only when it reads that finish. Then it finishes its own stream.
-   - The deck waits up to `PAIR_TIMEOUT` for that finish, so its own finish reaches the worker. It then reports paired and dials the worker at the saved `ip:port`.
+   - The worker reports paired only when it reads that finish. Then it finishes its own stream and shuts its transport down: a clean close, sent before the process exits.
+   - The deck waits up to `PAIR_TIMEOUT` for that finish or that close, so its own finish reaches the worker. It then reports paired and dials the worker at the saved `ip:port`.
+   - A worker that exits without the shutdown leaves its finish unsent. The deck then waits the whole `PAIR_TIMEOUT`, though it paired.
    - The deck saves the worker only after `PairDone`. Any other end of the stream, a stream reset, or a closed connection saves nothing.
 10. Each side bounds the exchange of one connection by `PAIR_TIMEOUT` = 10 s (proposed).
    - The deck closes a connection that does not finish in time as refused, then serves the next one. A silent peer therefore cannot hold the invite.
    - An exchange that fails after `PairOk` used the invite up. The deck reports the failure code: `pair.timeout`, `pair.unconfirmed` (no `PairDone`), or the worker list write error.
    - The worker fails with `pair.timeout` when the deck does not finish in time. It fails with `pair.unconfirmed` when the deck closes or resets instead.
-   - Neither side ends a failed exchange with a clean finish: it closes the connection as refused.
+   - Neither side ends a failed exchange with a clean finish: it closes the connection as refused. The worker then shuts its transport down, so the refusal is sent too.
    - A worker that fails after its allowlist write keeps the line. It does not roll back. The line is harmless: the deck does not list that worker, so it never dials it. The line admits only the deck the user chose. Pair again with a new invite, or delete the line (rule 15).
 11. The deck status line follows the invite: `waiting for worker…`, `pairing…`, `paired · <worker name>`, `expired`, or the error code.
 
@@ -106,7 +107,7 @@ Runtime files stay in `$TMPDIR/lattice` (`proc.sock`, `worker.addr`).
 
 The CLI pairs without the deck GUI. It uses the same data dir and files.
 
-1. `lattice invite [--name <deck name>]` makes an invite for a deck without a GUI. It uses `<data dir>/deck`. It prints the command, serves rules 3–10, prints `paired · <worker name> at <ip:port> (<node id prefix>)`, and exits. The deck name defaults to the host name.
+1. `lattice invite [--name <deck name>]` makes an invite for a deck without a GUI. It uses `<data dir>/deck`. It prints the command, serves rules 3–10, prints `paired · <worker name> at <ip:port> (<node id prefix>)`, shuts its transport down, and exits. The deck name defaults to the host name.
 2. `lattice add-deck <invite code> [--name <worker name>]` runs on the worker. It runs `latticed add-deck` (next to `lattice`, else on `PATH`). It passes the invite code on stdin, never as an argument.
 3. `latticed add-deck [<invite code>] [--name <worker name>]` is the worker side of rules 3–10. Without the argument it reads the code from the first line of stdin. Any local user sees an argument in `ps`, so prefer stdin.
 4. `latticed add-deck` needs a running `latticed` on the same machine: it reads the listen port from `worker.addr`. The worker name defaults to the host name.
