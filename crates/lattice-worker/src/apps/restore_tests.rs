@@ -3,7 +3,7 @@
 use super::*;
 use crate::test_app::{echo_hash, echo_id, echo_installed};
 use lattice_app::InstancePhase;
-use lattice_proc_ipc::{JournalId, ProcId};
+use lattice_proc_ipc::{ExitStatus, JournalId, ProcId, ProcInfo};
 
 /// One boot of `latticed`: a runner at `epoch_ms` with Echo installed.
 fn boot(epoch_ms: u64) -> AppsRunner {
@@ -27,11 +27,44 @@ fn out(iid: InstanceId, off: u64, bytes: &[u8]) -> Reply {
     }
 }
 
-/// What `latticed-proc` lists for the instance after a restart: Echo's meta, `start..end`.
+/// What `latticed-proc` lists for the instance after a restart: Echo's meta, `start..end`,
+/// and the live process its `start` spawned.
 fn listed(iid: InstanceId, start: u64, end: u64) -> JournalInfo {
+    let proc = ProcInfo::new(ProcId::from_raw(1), 1000, (80, 24), None);
+    listed_with(iid, start, end, vec![proc])
+}
+
+fn listed_with(iid: InstanceId, start: u64, end: u64, procs: Vec<ProcInfo>) -> JournalInfo {
     let meta = JournalMeta::new(echo_id(), Some(echo_hash()), Vec::new(), "s".to_owned()).encode();
     let range = (Offset::from_raw(start), Offset::from_raw(end));
-    JournalInfo::new(journal(iid), meta, range, Vec::new())
+    JournalInfo::new(journal(iid), meta, range, procs)
+}
+
+/// 06-apps.md, Restore rule 7: Echo's `start` spawns once; no listed process means it failed.
+#[test]
+fn a_failed_spawn_restores_failed_and_an_exited_process_does_not() {
+    let iid = InstanceId::from_raw(3);
+    let exited = ProcInfo::new(
+        ProcId::from_raw(1),
+        1000,
+        (80, 24),
+        Some(ExitStatus::Code(0)),
+    );
+    let cases = [
+        ("no process", Vec::new(), InstancePhase::Failed),
+        (
+            "live",
+            listed(iid, 0, 0).procs().to_vec(),
+            InstancePhase::Running,
+        ),
+        ("exited", vec![exited], InstancePhase::Running),
+    ];
+    for (name, procs, want) in cases {
+        let mut r = boot(1);
+        r.restore(vec![listed_with(iid, 0, 0, procs)]);
+        let got = r.records().first().map(InstanceRecord::phase);
+        assert_eq!(got, Some(want), "case={name}");
+    }
 }
 
 fn create(r: &mut AppsRunner) -> InstanceId {

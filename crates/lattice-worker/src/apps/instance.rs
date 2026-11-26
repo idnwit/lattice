@@ -273,6 +273,14 @@ impl Instance {
         }
     }
 
+    /// Restore: `start` asked for `asked` spawns. Fewer listed processes mean one failed
+    /// before the restart (06-apps.md, Restore rule 7).
+    pub(super) fn check_spawns(&mut self, asked: usize) {
+        if self.known.len() < asked && self.phase == InstancePhase::Running {
+            self.phase = InstancePhase::Failed;
+        }
+    }
+
     /// An `Exit` entry for `id`.
     pub(super) fn exited(&mut self, id: ProcId, out: &mut Out) {
         self.saw(id, out);
