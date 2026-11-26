@@ -57,6 +57,30 @@ fn create_opens_a_journal_before_it_spawns() {
 }
 
 #[test]
+fn every_spawn_names_the_terminal_the_emulator_implements() {
+    // 04-worker.md, Child env rule 3.
+    let (effects, iid) = create(&mut runner());
+    let Some(AppsEffect::Proc(Request::Spawn(spec))) = effects.get(1) else {
+        panic!("a spawn: {effects:?}");
+    };
+    let iid = iid.to_string();
+    let want: [(&[u8], &[u8]); 3] = [
+        (b"TERM", b"xterm-256color"),
+        (b"COLORTERM", b"truecolor"),
+        (b"LATTICE_INSTANCE_ID", iid.as_bytes()),
+    ];
+    for (name, value) in want {
+        let got = spec.env().iter().find(|(k, _)| k.as_slice() == name);
+        assert_eq!(
+            got.map(|(_, v)| v.as_slice()),
+            Some(value),
+            "case={}",
+            String::from_utf8_lossy(name)
+        );
+    }
+}
+
+#[test]
 fn create_of_an_unknown_app_opens_nothing() {
     let action = AppsAction::Create {
         app: AppId::try_new("test.missing").unwrap(),

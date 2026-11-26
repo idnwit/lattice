@@ -12,6 +12,11 @@ pub(crate) const DEFAULT_SIZE: (u16, u16) = (80, 24);
 /// Shell used when `$SHELL` is unset or empty.
 const FALLBACK_SHELL: &str = "/bin/sh";
 
+/// Env vars of every spawn: the terminal the `terminal` emulator implements (04-worker.md,
+/// Child env rule 3; proposed). `latticed-proc` puts them over its own env.
+pub(crate) const TERMINAL_ENV: [(&str, &str); 2] =
+    [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
+
 /// argv and cwd of a template, expanded on this worker. `cwd` empty means `$HOME`, then `/`.
 pub(crate) fn resolve(template: &SpawnTemplate, cwd: &str) -> (Vec<Vec<u8>>, Vec<u8>) {
     let argv = template

@@ -60,7 +60,7 @@ TBD: spill journals to disk past the memory budget?
 - Per process: `id`, `pid`, master fd, argv/env/cwd, size, journal, exit status.
 - Single reader of each PTY. Appends to the journal, then fans out. Never blocks on a slow subscriber; a lagging one gets `Gap`.
 - `PR_SET_CHILD_SUBREAPER` on Linux.
-- Children run in a new session with the PTY slave as controlling tty and fds 0/1/2. Env is the daemon's env with `Spawn` vars on top. Empty `cwd` inherits.
+- Children run in a new session with the PTY slave as controlling tty and fds 0/1/2. Empty `cwd` inherits. Env: see Child env below.
 
 Loop and fan-out (proposed, experiment):
 
@@ -73,6 +73,23 @@ Loop and fan-out (proposed, experiment):
 7. PTY input is queued per process, up to 1 MiB. Excess input is dropped.
 8. Clients may connect at any time; several at once is fine. A disconnect drops its subscriptions; children keep running.
 - Knows nothing about apps. `meta` is opaque.
+
+## Child env
+
+A spawned process must see a terminal it can drive, and nothing of the daemons' own setup.
+
+1. `latticed-proc` builds the env from its own env without any `LATTICE_*` variable. Daemon settings (`LATTICE_DATA_DIR`, `LATTICE_PROC_SOCK`, …) never reach a user's shell.
+2. Then it applies the `Spawn` env vars, in order. A `Spawn` var replaces an inherited one of the same name.
+3. `latticed` sends these vars with every `Spawn`:
+
+| Var | Value | Why |
+|---|---|---|
+| `TERM` | `xterm-256color` (proposed) | The `terminal` emulator (`vt100`) implements the xterm control sequences, 256 colors included. Set even when the daemon has no tty |
+| `COLORTERM` | `truecolor` (proposed) | The emulator keeps 24-bit SGR colors, and the viewers draw them (specs/03-sessions.md, Attach rule 14) |
+| `LATTICE_INSTANCE_ID` | the `iid` | Structured events, below |
+
+TBD: per-template env in `[[spawn]]`, once an app needs a different `TERM`?
+TBD: drop other vars of the terminal that started the daemon (`TERM_PROGRAM`, `TERMINFO`, …)?
 
 ## Local IPC (`latticed` ⇄ `latticed-proc`)
 
