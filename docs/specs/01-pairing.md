@@ -109,6 +109,15 @@ Runtime dir, one per user: `$XDG_RUNTIME_DIR/lattice` when `XDG_RUNTIME_DIR` is 
 - A deck listens on `0.0.0.0` with a port the OS picks.
 - An advertised `ip` is the address of the interface that routes to the peer: the default route for the deck, the route to the deck for the worker. `LATTICE_ADVERTISE_IP` overrides it.
 
+### Network requirements (M1)
+
+- Pairing needs the worker to open a new UDP flow to the deck's advertised `ip:port` (rule 4).
+- It fails when the deck sits behind NAT, or behind a VPN with no return route. The worker then fails with `pair.timeout`.
+- Verified case: an OpenVPN full tunnel with masquerade. A Linux worker could not dial back a Mac deck, while the deck reached the worker.
+- After pairing, the deck dials the worker. Only pairing needs the worker → deck path.
+- Workarounds: a network where the worker reaches the deck. Examples: the same LAN, a VPN route without masquerade, or an overlay such as ZeroTier. The relay removes the need (M2).
+- TBD: when the dial-back fails, should the deck fall back to dialing the worker?
+
 ## CLI
 
 The CLI pairs without the deck GUI. It uses the same data dir and files.
