@@ -4,8 +4,8 @@
 //! connects to `latticed-proc`, installs the cached app packages, and runs the worker
 //! host. It ships no app (D44): a deck sends the package of an app the worker lacks, and
 //! the loader here verifies it, compiles its runner (`lattice-wasm`), and caches it in
-//! `$TMPDIR/lattice/packages/<hash>.lpkg` so restore finds it after a restart. A restart never kills processes: they live in `latticed-proc`, and
-//! runners rebuild from its journals.
+//! `<data dir>/worker/packages/<hash>.lpkg` so restore finds it after a restart. A restart
+//! never kills processes: they live in `latticed-proc`, and runners rebuild from its journals.
 //!
 //! M1 (direct only): QUIC on `0.0.0.0:7441`; only decks in the allowlist `worker/decks`
 //! may connect (specs/01-pairing.md, rules 12–14). The worker writes `<node id>@<addr>` to

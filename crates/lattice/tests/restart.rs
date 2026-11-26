@@ -56,9 +56,18 @@ mod restart {
         let exe = Path::new(env!("CARGO_BIN_EXE_lattice"));
         let out = exe.parent().unwrap();
         let mut cmd = Command::new(env!("CARGO"));
-        cmd.args(["build", "--quiet", "-p", "latticed", "-p", "latticed-proc"])
-            .arg("--target-dir")
-            .arg(out.parent().unwrap());
+        // `--locked` as in the gate. No feature flags: neither daemon declares features.
+        cmd.args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "latticed",
+            "-p",
+            "latticed-proc",
+        ])
+        .arg("--target-dir")
+        .arg(out.parent().unwrap());
         if out.ends_with("release") {
             cmd.arg("--release");
         }
