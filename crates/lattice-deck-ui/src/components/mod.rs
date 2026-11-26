@@ -10,6 +10,7 @@ mod controls;
 mod files;
 mod git;
 mod glyph;
+mod invite;
 mod lines;
 mod mobile;
 mod ports;
@@ -27,6 +28,7 @@ pub use git::{Change, Commit, GitTool, Mark, git_tool};
 
 pub use glyph::Status;
 pub(crate) use glyph::state_glyph;
+pub use invite::{AddWorker, AddWorkerActions, add_worker_dialog};
 pub use lines::{
     Density, Line, Run, Tone, cell_grid, cell_probe, prompt_input, styled_lines, tone_color,
 };

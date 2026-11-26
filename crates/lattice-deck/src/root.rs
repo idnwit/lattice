@@ -22,7 +22,11 @@ use nsh_core::element::desktop::{current_window, window as app_window};
 use nsh_core::prelude::*;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::instances::InstanceCmd;
+use crate::invite::InviteDialog;
 use crate::link::{Cmd, Shared};
+use crate::pairing::Pairing;
+use crate::status::LinkState;
 use crate::workspace::{App, CloseAsk, Content, Pane, Workspace};
 
 /// Desktop canvas size (artboard "Desktop / Web — Advanced workspace").
@@ -52,10 +56,12 @@ fn apps() -> Vec<AppChoice> {
 
 /// Handles the views share. `Copy`.
 #[derive(Clone, Copy)]
-struct Deck {
-    shared: Shared,
-    /// The link's command queue; `None` without a worker.
-    cmds: Stored<Option<UnboundedSender<Cmd>>>,
+pub(crate) struct Deck {
+    pub(crate) shared: Shared,
+    /// The link task's command queue.
+    cmds: Stored<UnboundedSender<Cmd>>,
+    /// The Add worker dialog and its pairing task.
+    pub(crate) pairing: Pairing,
 }
 
 impl Deck {
@@ -63,14 +69,13 @@ impl Deck {
         self.shared.ws.update(f);
     }
 
-    /// Sends `cmd` to the link. False without a worker or once the link ended.
-    fn send(self, cmd: Cmd) -> bool {
-        self.cmds
-            .with(|c| c.as_ref().is_some_and(|tx| tx.send(cmd).is_ok()))
+    /// Sends `cmd` to the link task. False once the task ended.
+    fn send(self, cmd: InstanceCmd) -> bool {
+        self.cmds.with(|tx| tx.send(Cmd::Instance(cmd)).is_ok())
     }
 
     fn create(self, pane: PaneId, app: &'static Builtin) {
-        if !self.send(Cmd::Create { pane, app }) {
+        if !self.send(InstanceCmd::Create { pane, app }) {
             self.ws(|w| w.failed(pane, "deck.no_worker".to_owned()));
         }
     }
@@ -121,7 +126,7 @@ impl Deck {
         let mut iid = None;
         self.ws(|w| iid = w.confirm_close());
         if let Some(iid) = iid
-            && !self.send(Cmd::Close { iid })
+            && !self.send(InstanceCmd::Close { iid })
         {
             // No link: nothing will ever answer; the pane goes now.
             self.ws(|w| w.instances(&[]));
@@ -143,14 +148,26 @@ fn app_of(b: &Builtin) -> App {
 #[component]
 pub fn DeckApp() -> impl IntoElement {
     lattice_deck_ui::fonts::register();
+    let files = crate::data::deck_files();
+    let list = crate::data::paired_workers(files.as_ref());
     let shared = Shared {
         ws: signal(Workspace::default()),
         trees: signal(BTreeMap::new()),
-        status: signal("no worker".to_owned()),
+        link: signal(LinkState::NoWorker),
     };
+    let active = list.latest().cloned();
+    let cmds = stored(crate::link::start(shared, files.clone(), active));
     let deck = Deck {
         shared,
-        cmds: stored(crate::link::start(shared)),
+        cmds,
+        pairing: Pairing {
+            dialog: signal(InviteDialog::default()),
+            workers: signal(list),
+            files: stored(files),
+            cmds,
+            task: stored(None),
+            owner: Owner::current(),
+        },
     };
     app_window()
         .id("main")
@@ -164,32 +181,22 @@ fn screen(deck: Deck) -> View {
     let win = current_window();
     effect(move || win.focus());
     bind_pane_keys(move |axis| deck.split(axis), move || deck.close());
-    let status = deck.shared.status;
-    let shell = Shell::new(move || workspace(deck)).status(move || {
-        status_bar()
-            .child(dynamic(move || {
-                let text = status.get();
-                link_indicator(link_status(&text), &text)
-            }))
-            .child(spacer())
-            .child(meta("⌘T new tab · ⌘D split · ⌘W close"))
-    });
+    let link = deck.shared.link;
+    let shell = Shell::new(move || workspace(deck))
+        .rail(move || crate::rail::rail(deck.pairing.workers, link, deck.pairing))
+        .status(move || {
+            status_bar()
+                .child(dynamic(move || {
+                    link.with(|l| link_indicator(l.status(), &l.text()))
+                }))
+                .child(spacer())
+                .child(meta("⌘T new tab · ⌘D split · ⌘W close"))
+        });
     responsive_layout(
         shell,
         Panels::new(false, false),
         Regions::new(Region::Workspace),
     )
-}
-
-/// The link line's glyph: shape + hue from its text.
-fn link_status(text: &str) -> Status {
-    match text {
-        t if t.starts_with("direct") => Status::Online,
-        t if t.starts_with("relay") => Status::Relay,
-        "connecting" => Status::Idle,
-        "no worker" => Status::Offline,
-        _ => Status::Error,
-    }
 }
 
 fn workspace(deck: Deck) -> View {
@@ -201,14 +208,19 @@ fn workspace(deck: Deck) -> View {
         .on_pick(move |id| deck.open(&id))
         .on_split(move |axis| deck.split(axis));
     let mobile = computed(|| Layout::for_width(window().width.0) == Layout::Mobile);
+    let unpaired = deck.pairing.workers;
     view()
         .flex_1()
         .min_w(px(0.0))
         .min_h(px(0.0))
+        .relative()
         .child(bar.render())
         .child(dynamic(move || {
             let mobile = mobile.get();
             ws.with(|w| match w.tab() {
+                None if unpaired.with(|l| l.workers().is_empty()) => {
+                    crate::rail::no_worker(deck.pairing)
+                }
                 None => {
                     let height = if mobile { row::ROW_TOUCH } else { row::ROW_MD };
                     app_picker(&apps(), height, move |id| deck.open(&id))
@@ -223,6 +235,7 @@ fn workspace(deck: Deck) -> View {
                 }
             })
         }))
+        .child(crate::rail::dialog(deck.pairing))
 }
 
 fn tab_items(w: &Workspace) -> Vec<TabItem> {
@@ -341,7 +354,7 @@ fn content(deck: Deck, pane: &Pane, focused: bool, mobile: bool) -> View {
             let (iid, trees) = (*iid, deck.shared.trees);
             let tree = move || trees.with(|m| m.get(&iid).cloned().unwrap_or_default());
             let on_event = Rc::new(move |event| {
-                deck.send(Cmd::Event { iid, event });
+                deck.send(InstanceCmd::Event { iid, event });
             });
             crate::interp::tree_view(tree, focused, on_event)
         }
@@ -363,15 +376,6 @@ fn note(text: &str, code: Option<&str>) -> View {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_link_line_glyph_follows_its_text() {
-        assert_eq!(link_status("direct · 3ms"), Status::Online);
-        assert_eq!(link_status("relay · 40ms"), Status::Relay);
-        assert_eq!(link_status("connecting"), Status::Idle);
-        assert_eq!(link_status("no worker"), Status::Offline);
-        assert_eq!(link_status("transport.unreachable"), Status::Error);
-    }
 
     #[test]
     fn tabs_show_their_pane_count_and_an_error_when_a_pane_failed() {

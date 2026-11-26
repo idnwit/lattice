@@ -143,7 +143,7 @@ async fn invite(name: Option<String>) -> anyhow::Result<()> {
     };
     let paired = tokio::time::timeout(
         ttl,
-        lattice_deck_core::accept_pair(&transport, &mut pending, &name, unix_now, save),
+        lattice_deck_core::accept_pair(&transport, &mut pending, &name, unix_now, save, |_| {}),
     )
     .await
     .map_err(|_| anyhow::anyhow!("expired"))??;

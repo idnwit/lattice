@@ -5,13 +5,22 @@
 //! app list (`lattice-builtin-apps`) and serves packages to the worker (D44).
 //!
 //! - `workspace`: tabs, split trees, panes, focus, as data.
-//! - `link`: the local worker link (experiment, `LATTICE_DECK_LIVE=1`) and the viewers.
+//! - `link`: the link to the active worker; `instances`: the viewers over it.
+//! - `pairing`, `invite`: the Add worker dialog and its pairing task (D47).
+//! - `rail`, `status`: the worker rail and the link state.
+//! - `data`: the data dir (`LATTICE_DATA_DIR`, else the OS data dir).
 //! - `interp`: the view-tree interpreter.
 //! - [`DeckApp`]: the root component.
 
+mod data;
+mod instances;
 mod interp;
+mod invite;
 mod link;
+mod pairing;
+mod rail;
 mod root;
+mod status;
 mod workspace;
 
 pub use root::DeckApp;

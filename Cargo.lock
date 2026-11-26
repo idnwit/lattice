@@ -1778,6 +1778,7 @@ dependencies = [
  "lattice-quic",
  "lattice-state",
  "lattice-sync-proto",
+ "lattice-transport",
  "lattice-wasm",
  "nsh-core",
  "nsh-engine",
