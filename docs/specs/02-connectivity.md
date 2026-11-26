@@ -30,6 +30,7 @@ The user's devices sync settings and layouts with each other directly. No server
 13. The rail and the status bar show the active worker's link state (Link states below).
 
 TBD: detecting a dead link takes the QUIC idle timeout (30 s, lattice-quic). Add an application-level heartbeat?
+TBD: QUIC keep-alive must stay below NAT UDP mapping lifetimes. About 30 s was observed for one-off flows behind a VPN NAT. `lattice-quic` sends a keep-alive every 5 s now (`KEEP_ALIVE`). Is 5 s the spec value, and is it enough for every NAT we support?
 
 ### Link states (deck)
 
