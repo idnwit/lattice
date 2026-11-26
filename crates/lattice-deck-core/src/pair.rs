@@ -126,7 +126,7 @@ pub struct PairedWorker {
 /// For each connection, bounded by one `timeout()` (`PAIR_TIMEOUT`, rule 10): read
 /// `PairRequest`, [`PendingInvite::check`] it at `now()`, answer `PairOk{deck_name}`, and
 /// wait for `PairDone`. Only then `save` the worker and finish the stream (rule 9). Then wait
-/// up to one more `timeout()` for the worker's finish, so ours reached it.
+/// up to one more `timeout()` for the worker's finish or clean close, so ours reached it.
 ///
 /// A connection that does not pair is closed as refused, and the next one is served while
 /// the invite is open. `on_step` hears each connection start ([`PairStep::Serving`]) and each
@@ -160,8 +160,8 @@ pub async fn accept_pair<T: Transport, F: Future<Output = ()>>(
                 // Dropping `exchange` unpaired closes the connection as refused.
                 save(&worker).map_err(DeckError::Remote)?;
                 exchange.confirm();
-                // The worker finishes once it read our finish. Paired either way: a lost
-                // finish only costs this wait.
+                // The worker finishes and shuts down once it read our finish. Paired either
+                // way: a lost finish only costs this wait.
                 if within(exchange.drain(), timeout()).await.is_none() {
                     tracing::debug!(worker = %worker.id, "no finish from the worker in time");
                 }
@@ -275,7 +275,7 @@ impl<C: Conn> Exchange<'_, C> {
         self.finish();
     }
 
-    /// Reads until the peer ends its stream, or the stream breaks.
+    /// Reads until the peer ends its stream, or the stream breaks (a close included).
     async fn drain(&mut self) {
         let mut buf = vec![0u8; READ_CHUNK];
         while let Ok(Some(_)) = self.recv.read(&mut buf).await {}

@@ -151,8 +151,10 @@ async fn invite(name: Option<String>) -> anyhow::Result<()> {
         |_| {},
         sleep,
     );
-    let paired = tokio::time::timeout(ttl, accept)
-        .await
+    let paired = tokio::time::timeout(ttl, accept).await;
+    // CLI rule 1: our finish or refusal leaves before the process exits.
+    transport.shutdown().await;
+    let paired = paired
         .map_err(|_| anyhow::anyhow!("pair.expired"))?
         .map_err(|e| anyhow::anyhow!("pairing failed: {}", deck_code(&e)))?;
     println!(

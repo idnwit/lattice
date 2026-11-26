@@ -92,6 +92,12 @@ pub trait Transport: Send + Sync {
 
     /// This node's id.
     fn local_id(&self) -> NodeId;
+
+    /// Closes every open connection with the generic close, then waits until each peer was
+    /// told, within `SHUTDOWN_WAIT` (01-transport.md, Transport trait rules 3–4). A process
+    /// calls it before it exits: packets still queued, a stream finish included, are lost
+    /// otherwise, and the peer waits for its idle timeout.
+    fn shutdown(&self) -> impl Future<Output = ()> + Send;
 }
 
 /// One QUIC connection to one peer (D4: one per peer pair).

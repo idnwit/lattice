@@ -55,6 +55,8 @@ impl Transport for OneDeck {
     fn local_id(&self) -> NodeId {
         id(1)
     }
+
+    async fn shutdown(&self) {}
 }
 
 impl Conn for FakeConn {

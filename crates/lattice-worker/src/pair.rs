@@ -2,7 +2,8 @@
 //!
 //! The worker dials the deck named by the invite (the transport pins its NodeId) and proves
 //! the invite secret. On `PairOk` it writes the deck to its allowlist, sends `PairDone`, and
-//! reports paired once the deck finishes its stream: the deck saved the worker then.
+//! reports paired once the deck finishes its stream: the deck saved the worker then. It
+//! finishes its own stream and shuts the transport down, so the finish leaves before exit.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -111,7 +112,8 @@ pub struct WorkerCard {
 /// and the deck confirmed it saved this worker.
 ///
 /// `now` is the current Unix time, in seconds. The whole exchange is bounded by
-/// `PAIR_TIMEOUT`.
+/// `PAIR_TIMEOUT`. `transport` serves this pairing only: once a connection is up, it is shut
+/// down before the call returns, so the worker's finish reaches the deck (rule 9).
 ///
 /// # Errors
 ///
@@ -139,6 +141,8 @@ pub async fn add_deck<T: Transport>(
         // Rule 10: a failed exchange never ends with a clean finish.
         conn.close(CloseReason::Refused);
     }
+    // Rules 9–10: the finish or the refusal leaves before the process exits.
+    transport.shutdown().await;
     outcome
 }
 
