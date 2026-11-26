@@ -166,6 +166,9 @@ Code: `crates/lattice-app`. Reducers live in the interface trait, not here.
 7. A runner ends its own instance with `ctx.finish()`. The host then closes it as in rule 5, with no confirmation.
 8. `terminal` calls `finish` when its shell exits (`exit`, `Ctrl-D`, crash). The pane closes.
 9. A process started by hand inside a shell belongs to the shell's `terminal` instance. No app attaches to it.
+10. A `failed` instance stays in `worker/apps` with its `iid` and phase `failed`. A `latticed` restart keeps it `failed` (Restore rule 7).
+11. Nothing closes a `failed` instance by itself: not the worker, not a deck, not the CLI. Only a `close` or `kill` the user asks for removes it.
+    Reason: every deck must see that the instance failed. A silent close hides the failure.
 
 | State | Meaning |
 |---|---|

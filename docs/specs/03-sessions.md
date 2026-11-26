@@ -34,6 +34,9 @@ Pane    *─1 AppInstance
 13. Closing a pane by the user asks for confirmation: the instance stops and its history is deleted.
 14. After confirmation the deck sends `close{iid}`. The pane shows `closing` until every process has exited and the instance is deleted. Then the pane goes away.
 15. Right-click on a tab opens a context menu with `Force kill`. It sends `kill{iid}` for the instances of that tab. TBD: design canvas and simulator update (design-change.md), and its key chord?
+16. An instance whose phase is `failed` (for example, its spawn failed) keeps its pane. The deck never closes it by itself (06-apps.md, Instances rules 10, 11).
+17. The pane of a `failed` instance shows the error glyph and `instance.failed` in its header, and `<App> failed` in its body. Its tab shows the error glyph.
+18. Only the user closes the pane of a `failed` instance, as in rules 13 and 14.
 
 ## Mobile
 
@@ -76,7 +79,7 @@ TBD: design canvas and simulator update for the app picker and the mobile region
 `lattice probe [<command>] [--exit] [--iid <iid>]` checks a worker end to end without a GUI (ROADMAP M1.8).
 
 1. A new instance starts in the worker's default cwd, like attach (rule 4). The deck never sends a path from its own machine.
-2. The probe subscribes to `worker/apps`. When its instance shows `failed` there, it prints `instance.failed` with the iid and exits with code 1.
+2. The probe subscribes to `worker/apps`. When its instance shows `failed` there, it prints `instance.failed` with the iid and exits with code 1. It never closes the instance (Behavior 18).
 3. Otherwise it types `<command>` (and `exit` with `--exit`), prints the screen it received, and exits with code 0.
 
 ## Data
