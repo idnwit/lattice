@@ -66,6 +66,7 @@ Later, as each lands: `cargo deny check`, proptest with `PROPTEST_RNG_SEED`.
 
 - A nested `AGENTS.md` adds to and overrides this one for its directory (planned: `latticed-proc`, `lattice-proc-ipc`).
 - Scratch output goes to `.generated/<slug>/` (gitignored). Delete it when done.
+- Git worktrees (e.g. `.claude/worktrees/`, gitignored) are temporary. When the work in one is merged or cherry-picked, remove it: check `git -C <path> status` is clean and `git cherry <target> <branch>` shows nothing unpicked, then `git worktree remove <path>`, `git worktree prune`, and `git branch -D <branch>`. Never leave a finished worktree or its branch behind.
 
 ## Hard rules
 

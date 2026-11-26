@@ -8,3 +8,4 @@ target/
 /crates/lattice-deck-ui/examples/gallery/.nsh/
 /crates/lattice-deck-ui/examples/gallery/target/
 /crates/lattice-deck-ui/examples/gallery/Cargo.lock
+/.claude/worktrees/
