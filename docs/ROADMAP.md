@@ -75,15 +75,15 @@ Relay, hole punching, PAKE, device list, content keys, iOS deck, WASM runtime fo
 
 Goal: deck and worker behind different NATs connect at once through the relay, then upgrade to direct.
 
-| # | Goal | Crates |
-|---|---|---|
-| M2.1 | Relay codec, token table, relay engine, client registration FSM (sans-IO) | `lattice-relay-proto` |
-| M2.2 | Public UDP relay binary. It forwards ciphertext and never decrypts | `lattice-relay` |
-| M2.3 | Magic socket: relay and direct paths under one virtual address | `lattice-quic` |
-| M2.4 | `PathSelector`: relay first, direct after a probe, back to relay after 2 s of direct silence | `lattice-transport` |
-| M2.5 | Hole punching: candidate exchange and punch nonce | `lattice-quic` |
-| M2.6 | Pairing per [specs/01-pairing.md](specs/01-pairing.md): 6-character code, PAKE, signed device list, content key | identity crate (new) |
-| M2.7 | iOS deck: QR scan, network changes, path switches | `lattice-deck` |
+| # | Goal | Crates | Status |
+|---|---|---|---|
+| M2.1 | Relay codec, token table, relay engine, client registration FSM (sans-IO) | `lattice-relay-proto` | done: codec proptest and fuzz target `relay_decode`; `PUNCH_REQ` dropped until M2.5 |
+| M2.2 | Public UDP relay binary. It forwards ciphertext and never decrypts | `lattice-relay` | done: `lattice-relay --key <file> [--listen 0.0.0.0:7400]`; two nodes exchange a packet over localhost |
+| M2.3 | Magic socket: relay and direct paths under one virtual address | `lattice-quic` | partial: relay path, virtual addresses, 1200-byte MTU; `connect_via_relay_then_echo_on_a_bi_stream` passes. Direct path and cwnd reset land with M2.5 |
+| M2.4 | `PathSelector`: relay first, direct after a probe, back to relay after 2 s of direct silence | `lattice-transport` | done: unit tests and a seeded simulation proptest; not yet driven by the socket (M2.5) |
+| M2.5 | Hole punching: candidate exchange and punch nonce | `lattice-quic` | todo |
+| M2.6 | Pairing per [specs/01-pairing.md](specs/01-pairing.md): 6-character code, PAKE, signed device list, content key | identity crate (new) | todo |
+| M2.7 | iOS deck: QR scan, network changes, path switches | `lattice-deck` | todo |
 
 Done when: losing the direct path falls back to relay without dropping the session. The M1 allowlist migrates into the device list.
 

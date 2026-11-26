@@ -1,7 +1,8 @@
 //! `Transport` and `Conn` over quinn.
 
 use crate::config::{Mode, QuicConfig};
-use crate::tls::{self, Identity};
+use crate::socket::MagicSocket;
+use crate::tls::{self, Identity, Mtu};
 use bytes::Bytes;
 use lattice_key::NodeId;
 use lattice_transport::{
@@ -25,10 +26,14 @@ const CLOSE_GENERIC: quinn::VarInt = quinn::VarInt::from_u32(0);
 /// Transport trait rule 3; proposed).
 const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Relay mode: how long `connect` waits for the relay registration before it fails
+/// with `transport.unreachable` (01-transport.md, Connect sequence rule 3).
+const REGISTER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A bound node: one UDP socket and one quinn endpoint.
 ///
-/// Relay mode also runs relay registration (skeleton). Direct mode dials
-/// addresses from [`QuicTransport::add_peer`].
+/// Relay mode dials every peer at its virtual address through the magic socket.
+/// Direct mode dials addresses from [`QuicTransport::add_peer`].
 #[derive(Debug)]
 pub struct QuicTransport {
     endpoint: quinn::Endpoint,
@@ -38,6 +43,8 @@ pub struct QuicTransport {
     peers: Mutex<BTreeMap<NodeId, SocketAddr>>,
     /// Live connections, reused by `connect` (D4: one per peer pair).
     conns: Mutex<BTreeMap<NodeId, quinn::Connection>>,
+    /// Relay mode only.
+    socket: Option<Arc<MagicSocket>>,
 }
 
 impl QuicTransport {
@@ -56,33 +63,49 @@ impl QuicTransport {
     /// Plain UDP socket at `cfg.bind`, quinn's own socket driver.
     fn bind_direct(cfg: QuicConfig) -> Result<Self, TransportError> {
         let local_id = cfg.key.node_id();
-        let identity = Identity::new(cfg.key);
+        let identity = Identity::new(Arc::new(cfg.key), Mtu::Discover);
         let endpoint = quinn::Endpoint::server(identity.server_config()?, cfg.bind)
             .map_err(|e| TransportError::Io(e.to_string()))?;
         tracing::info!(addr = ?endpoint.local_addr().ok(), "quic direct-only endpoint bound");
-        Ok(Self {
+        Ok(Self::with(endpoint, local_id, identity, None))
+    }
+
+    fn with(
+        endpoint: quinn::Endpoint,
+        local_id: NodeId,
+        identity: Identity,
+        socket: Option<Arc<MagicSocket>>,
+    ) -> Self {
+        Self {
             endpoint,
             local_id,
             identity,
             peers: Mutex::new(BTreeMap::new()),
             conns: Mutex::new(BTreeMap::new()),
-        })
+            socket,
+        }
     }
 
-    #[allow(
-        clippy::todo,
-        unused_variables,
-        clippy::unused_async,
-        reason = "L1 skeleton: relay mode lands with its contract test"
-    )]
+    /// Magic socket at `cfg.bind`, registered with `relay` (01-transport.md, Paths).
+    ///
+    /// Relay path only; direct paths and their cwnd reset land with hole punching (M2.5).
     async fn bind_relay(cfg: QuicConfig, relay: HomeRelay) -> Result<Self, TransportError> {
-        // bind tokio UdpSocket at cfg.bind; wrap in MagicSocket
-        // tls::Identity as in direct mode (raw public keys, RFC 7250)
-        // cap max UDP payload so packet + SEND_HEADER_LEN fits the relay path (rule 7)
-        // congestion: wrapper ControllerFactory that resets cwnd on PathEvent::Switched (rule 6)
-        // Endpoint::new_with_abstract_socket(..); spawn relay register + keepalive task
-        // connect: virtual_addr(peer); PUNCH_REQ → probes → PathSelector (connect sequence 4–5)
-        todo!()
+        let io = |e: std::io::Error| TransportError::Io(e.to_string());
+        let udp = tokio::net::UdpSocket::bind(cfg.bind).await.map_err(io)?;
+        let socket = Arc::new(MagicSocket::new(udp, relay));
+        let key = Arc::new(cfg.key);
+        let local_id = key.node_id();
+        let identity = Identity::new(key.clone(), Mtu::RelaySafe);
+        let endpoint = quinn::Endpoint::new_with_abstract_socket(
+            quinn::EndpointConfig::default(),
+            Some(identity.server_config()?),
+            socket.clone(),
+            Arc::new(quinn::TokioRuntime),
+        )
+        .map_err(io)?;
+        socket.spawn_registrar(key);
+        tracing::info!(addr = ?endpoint.local_addr().ok(), relay = %relay.addr(), "quic relay endpoint bound");
+        Ok(Self::with(endpoint, local_id, identity, Some(socket)))
     }
 
     /// [`Transport::shutdown`], callable without the trait (binaries that only bind).
@@ -136,8 +159,27 @@ impl QuicTransport {
         conns.insert(peer, conn.clone());
     }
 
-    fn peer_addr(&self, peer: NodeId) -> Option<SocketAddr> {
-        lock(&self.peers).get(&peer).copied()
+    /// Where quinn dials `peer`. Relay mode waits for the registration first.
+    async fn dial_addr(&self, peer: NodeId) -> Result<SocketAddr, TransportError> {
+        let Some(socket) = &self.socket else {
+            return lock(&self.peers)
+                .get(&peer)
+                .copied()
+                .ok_or(TransportError::Unreachable);
+        };
+        if !socket.wait_registered(REGISTER_WAIT).await {
+            tracing::debug!(?peer, "relay not registered: connect fails");
+            return Err(TransportError::Unreachable);
+        }
+        socket.virtual_addr(peer).ok_or(TransportError::Unreachable)
+    }
+
+    fn conn(&self, inner: quinn::Connection, peer: NodeId) -> QuicConn {
+        QuicConn {
+            inner,
+            remote: peer,
+            socket: self.socket.clone(),
+        }
     }
 }
 
@@ -151,9 +193,9 @@ impl Transport for QuicTransport {
 
     async fn connect(&self, peer: NodeId) -> Result<QuicConn, TransportError> {
         if let Some(inner) = self.live_conn(peer) {
-            return Ok(QuicConn::new(inner, peer));
+            return Ok(self.conn(inner, peer));
         }
-        let addr = self.peer_addr(peer).ok_or(TransportError::Unreachable)?;
+        let addr = self.dial_addr(peer).await?;
         let mismatch = Arc::new(AtomicBool::new(false));
         let cfg = self.identity.client_config(peer, mismatch.clone())?;
         let connecting = self
@@ -171,7 +213,7 @@ impl Transport for QuicTransport {
         // Two racing connects may both dial; the last one is kept for reuse.
         self.remember(peer, &inner);
         tracing::debug!(?peer, "quic connected");
-        Ok(QuicConn::new(inner, peer))
+        Ok(self.conn(inner, peer))
     }
 
     async fn accept(&self) -> Result<(NodeId, QuicConn), TransportError> {
@@ -193,7 +235,7 @@ impl Transport for QuicTransport {
             // Access control is the host's job (device list), not L1's.
             self.remember(peer, &inner);
             tracing::debug!(?peer, "quic accepted");
-            return Ok((peer, QuicConn::new(inner, peer)));
+            return Ok((peer, self.conn(inner, peer)));
         }
     }
 
@@ -236,12 +278,8 @@ fn conn_err(e: quinn::ConnectionError) -> TransportError {
 pub struct QuicConn {
     inner: quinn::Connection,
     remote: NodeId,
-}
-
-impl QuicConn {
-    fn new(inner: quinn::Connection, remote: NodeId) -> Self {
-        Self { inner, remote }
-    }
+    /// Relay mode: the socket that knows the active path.
+    socket: Option<Arc<MagicSocket>>,
 }
 
 impl Conn for QuicConn {
@@ -272,8 +310,11 @@ impl Conn for QuicConn {
     }
 
     fn path(&self) -> PathInfo {
-        // Direct mode only; relay mode reads the socket's PathSelector (TBD).
-        PathInfo::new(PathKind::Direct, self.inner.rtt())
+        let kind = self
+            .socket
+            .as_ref()
+            .map_or(PathKind::Direct, |s| s.path_of(self.remote));
+        PathInfo::new(kind, self.inner.rtt())
     }
 
     fn remote_id(&self) -> NodeId {

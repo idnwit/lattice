@@ -27,15 +27,15 @@ Contract tests are `#[ignore = "contract: …"]`. Implementing a body un-ignores
 | `lattice-wasm` | adapter | implemented, tested (wasmtime host for runners and viewers; echo through `AppsRunner`, terminal runner and viewer wasm = native) | 06-apps (Runtimes) |
 | `lattice-app-terminal` (`apps/terminal`) | app | implemented, tested (vt100 emulator; builds for wasm32) | 06-apps, specs/03-sessions |
 | `lattice-app-echo` (`apps/echo`) | app | implemented, tested (no process; builds for wasm32) | 06-apps |
-| `lattice-transport` | contract | skeleton; `PathInfo` implemented | 01-transport |
-| `lattice-relay-proto` | contract | skeleton | 01-transport (Relay wire format) |
+| `lattice-transport` | contract | implemented, tested (`PathSelector` simulation proptest) | 01-transport |
+| `lattice-relay-proto` | contract | implemented, tested (codec, token table, engine, client; punch messages decode only) | 01-transport (Relay wire format) |
 | `lattice-sync-proto` | contract | implemented, tested (framing, `StreamId`) | 02-sync (Wire messages) |
-| `lattice-quic` | adapter | direct-only mode implemented, tested (loopback bind only); relay mode skeleton | 01-transport (Paths) |
+| `lattice-quic` | adapter | direct-only mode and relay mode (relay path only) implemented, tested; direct paths in relay mode wait for M2.5 | 01-transport (Paths) |
 | `lattice-worker` | host | implemented, tested (apps runner with a fake daemon, host end to end over in-memory fakes) | 04-worker, 02-sync |
 | `lattice-deck-core` | host | implemented, tested (replica, link over a fake transport); no session or layout model yet | 05-deck, specs/03-sessions |
 | `latticed-proc` | bin (`proc`) | implemented, tested (journal proptest, end-to-end daemon test) | 04-worker |
 | `latticed` | bin | implemented (ships no app; WASM package loader and cache) | 04-worker, 06-apps |
-| `lattice-relay` | bin (`relay`) | skeleton | 08-infrastructure |
+| `lattice-relay` | bin (`relay`) | implemented, tested (UDP loop over `RelayEngine`, localhost exchange test) | 08-infrastructure |
 | `lattice-deck-ui` | ui | implemented, tested (components, layouts, workspace pieces; gallery and PoC headless tests) | 05-deck, design-system, specs/03-sessions |
 | `lattice-deck` | bin | M1 PoC shell (tabs, splits, `+` menu, app picker, close confirmation, mobile pager); WASM viewers and the view-tree interpreter; links no app crate | 05-deck, specs/03-sessions |
 | `lattice` | bin | placeholder | — |
@@ -99,26 +99,26 @@ Bottom-up, one PR per crate or per sans-IO core (architecture.md, Brickie):
 |---|---|
 | `lattice-proc-ipc` | `decoder_yields_none_until_a_frame_is_complete`, `tlv_iter_reports_truncated_field_once`, `every_request_roundtrips`, `unknown_type_decodes_to_none`, `spawn_spec_rejects_empty_argv`, `journal_id_rejects_empty`, `entry_gap_and_error_replies_roundtrip`, `journals_reply_roundtrips`, `decoder_rejects_a_frame_above_one_mib`, `golden_v1_requests_decode`, `golden_v1_replies_decode`, `encoder_still_writes_the_golden_bytes`, `unknown_tag_is_ignored`, `random_bytes_never_panic`, `mutated_golden_frames_never_panic`, `frames_survive_any_split` |
 | `latticed-proc` | `two_procs_interleave_in_read_order`, `gap_exactly_when_over_budget`, `trim_drops_history_and_offsets_keep_growing`, `oversized_out_keeps_only_its_tail`, `journal_matches_the_history_oracle`, `slow_subscriber_never_blocks_the_others`, `shell_output_then_exit_code_then_drop`, `cat_echoes_input_and_drop_is_busy_while_it_lives`, `unknown_type_is_unsupported_and_the_connection_stays`, `malformed_frame_closes_only_that_client`, `a_reconnecting_client_finds_the_journal_and_replays_it` |
-| `lattice-transport` | `starts_on_relay_and_goes_direct_after_probe`, `relay_fallback_after_two_seconds_of_direct_silence`, `no_fallback_while_relay_is_dead` |
-| `lattice-relay-proto` | `relay_and_quic_split_on_first_byte`, `keepalive_roundtrips`, `unknown_relay_type_is_rejected_not_panicking`, `send_accepted_only_from_the_tokens_bound_address`, `expired_token_is_refused`, `send_is_forwarded_as_recv_to_the_registered_peer`, `quic_packets_sent_to_the_relay_are_dropped`, `keepalive_every_25_seconds_after_registration`, `send_needs_registration` |
+| `lattice-transport` | `starts_on_relay_and_goes_direct_after_probe`, `relay_fallback_after_two_seconds_of_direct_silence`, `direct_rx_postpones_fallback_and_the_deadline`, `no_fallback_while_relay_is_dead`, `switches_only_on_probe_or_direct_silence` |
+| `lattice-relay-proto` | `relay_and_quic_split_on_first_byte`, `keepalive_roundtrips`, `unknown_relay_type_is_rejected_not_panicking`, `send_accepted_only_from_the_tokens_bound_address`, `expired_token_is_refused`, `send_is_forwarded_as_recv_to_the_registered_peer`, `quic_packets_sent_to_the_relay_are_dropped`, `keepalive_every_25_seconds_after_registration`, `send_needs_registration`, `replayed_register_is_dropped`, `stale_register_is_dropped`, `a_replay_after_a_wall_clock_step_back_is_dropped`, `every_message_has_its_spec_layout`, `send_from_another_address_is_dropped`, `only_the_reg_ok_of_the_last_register_is_accepted`, `a_pong_with_a_new_address_reregisters_at_once`, `client_reregisters_after_sixty_seconds_of_silence` |
+| `lattice-relay` | `two_nodes_exchange_a_packet_through_the_relay`, `relay_key_survives_a_restart` |
 | `lattice-sync-proto` | `stream_id_accepts_paths_and_rejects_empty_segments`, `messages_roundtrip_across_split_reads`, `unknown_message_type_is_unsupported_not_fatal` |
-| `lattice-quic` | `direct_localhost_echo_on_a_bi_stream`, `wrong_node_id_is_refused`, `non_loopback_bind_is_refused`, `a_refused_peer_fails_with_refused_instead_of_hanging`; `connect_via_relay_then_echo_on_a_bi_stream` (localhost, in-process relay; ignored until relay mode) |
+| `lattice-quic` | `direct_localhost_echo_on_a_bi_stream`, `wrong_node_id_is_refused`, `non_loopback_bind_is_refused`, `a_refused_peer_fails_with_refused_instead_of_hanging`; `connect_via_relay_then_echo_on_a_bi_stream`, `connect_without_a_reachable_relay_is_unreachable` (localhost, in-process relay) |
 | `lattice-worker` | `worker_stream_ids_roundtrip`, `messages_before_hello_get_an_error`, `subscribe_without_version_resumes_from_full_state`, `instance_action_goes_to_its_runner`, `resume_inside_the_queue_sends_only_missing_deltas`, `resume_older_than_the_queue_gets_full_state`, `create_opens_a_journal_before_it_spawns`, `create_of_an_unknown_app_opens_nothing`, `close_drops_the_journal_only_after_every_exit`, `finish_closes_the_instance_without_a_request`, `replay_rebuilds_state_and_runs_no_effects`, `instances_never_see_each_other`, `replay_commits_deltas_but_drops_effects`, `a_refused_action_rolls_back`, `resumed_runs_once_when_replay_reaches_the_listed_end`, `a_new_instance_and_an_empty_journal_resume_at_once`, `an_instance_action_answers_with_its_reply_or_its_app_error`, `instance_lifecycle_with_a_fake_proc_daemon`, `close_hangs_up_live_processes_and_kill_escalates`, `a_deck_creates_an_instance_and_reads_its_state`, `unpaired_deck_cannot_open_a_stream` |
 | `lattice-app` | `delta_out_of_order_asks_for_resync`, `full_state_then_deltas_equal_the_runner_state`, `bad_bytes_ask_for_a_resync_without_a_version`, `app_id_rejects_empty`, `app_id_is_reverse_dns`, `journal_meta_roundtrips`, `a_new_record_starts_with_no_process`, `record_list_roundtrips`, `a_typed_call_round_trips_through_dispatch`, `actions_encode_by_declaration_order_and_bad_bytes_are_refused`, `a_ticket_settles_each_way`, `dropping_the_resolver_settles_unknown`, `bytes_that_do_not_decode_are_a_bad_reply`, `resolving_wakes_the_polling_task`, `variant_names_follow_serde_renames`, `app_error_carries_the_variant_and_its_encoding` |
 | `lattice-app-macros` | `expands_action_enum_runner_and_client_in_declaration_order`, `crate_attribute_overrides_the_path`, `method_names_become_upper_camel_variants`, `refuses_bad_reducer_shapes`, `refuses_self_types_other_items_and_a_missing_app_bound` |
 | `lattice-app-terminal` | `start_spawns_the_shell_template`, `input_goes_to_the_shell_and_changes_no_state`, `zero_size_is_refused`, `clear_outside_alt_screen_is_a_clean_point`, `shell_exit_finishes_the_instance`, `resumed_nudges_the_pty_of_a_live_shell_only`, `resize_through_the_client_returns_the_size_in_effect` |
 | `lattice-deck-core` | `busiest_child_follows_the_token_priority`, `pane_id_parses_tab_dot_pane`, `worker_status_follows_its_link`, `updates_route_to_full_state_and_delta`, `open_link_sends_hello_first_and_reports_the_path`, `a_typed_call_resolves_from_the_worker_reply_and_link_loss_gives_unknown`, `queued_calls_resolve_from_their_action_results`, `link_end_settles_queued_not_connected_and_in_flight_unknown` |
 
-Planned with the first implementation (verification.md scope): proptest for the fan-out (unit tests only so far), fuzz targets for both codecs (the IPC codec has a proptest stand-in), deterministic simulation of `PathSelector`.
+Planned with the first implementation (verification.md scope): proptest for the fan-out (unit tests only so far), Stateright for snapshot and compaction.
 
 ## Open questions
 
 Each blocks the body that names it. Do not code past it without an answer (spec-first.md).
 
-- TBD: relay `ts` units, `ttl` units and default, `REGISTER` freshness window?
-- TBD: hole-punch candidate list encoding, and the source of the punch nonce?
+- TBD: hole-punch candidate list encoding, and the source of the punch nonce (M2.5)?
 - TBD: duplicate window after a path switch: 1 s or 2 s (01 says 1–2 s)?
-- TBD: virtual address scheme for a peer NodeId inside the magic socket?
+- TBD: final virtual address scheme (01-transport.md, Paths rule 9: the NodeId-derived one is a placeholder)?
 - TBD: sync frame byte order and max frame length; stream id charset and length?
 - TBD: signature batches for `Change` (02 says signatures cover batches)?
 - TBD: canonical text form of a `NodeId` (CLI, config, pairing)?

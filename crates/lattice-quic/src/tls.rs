@@ -41,6 +41,19 @@ const KEEP_ALIVE: Duration = Duration::from_secs(5);
 /// TBD: spec value (01-transport.md). quinn's default.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Fixed UDP payload on paths that may go through the relay, PMTUD off
+/// (01-transport.md, Paths rule 7): 1200 + the 41-byte `SEND` header fits any real path.
+const RELAY_SAFE_MTU: u16 = 1200;
+
+/// Which UDP payload size quinn uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mtu {
+    /// quinn's defaults with PMTUD: direct-only mode.
+    Discover,
+    /// [`RELAY_SAFE_MTU`], fixed: relay mode.
+    RelaySafe,
+}
+
 /// DER prefix of an ed25519 `SubjectPublicKeyInfo` (RFC 8410):
 /// `SEQUENCE { SEQUENCE { OID 1.3.101.112 }, BIT STRING (0 unused bits) }`.
 const ED25519_SPKI_PREFIX: [u8; 12] = [
@@ -72,16 +85,18 @@ pub(crate) fn node_id_from_spki(der: &[u8]) -> Option<NodeId> {
 #[derive(Debug, Clone)]
 pub(crate) struct Identity {
     certified: Arc<CertifiedKey>,
+    mtu: Mtu,
 }
 
 impl Identity {
-    /// Binds TLS to `key`.
-    pub(crate) fn new(key: NodeKey) -> Self {
+    /// Binds TLS to `key`. Connections use `mtu`.
+    pub(crate) fn new(key: Arc<NodeKey>, mtu: Mtu) -> Self {
         let id = key.node_id();
-        let signer = Arc::new(NodeSigningKey(Arc::new(key)));
+        let signer = Arc::new(NodeSigningKey(key));
         let cert = CertificateDer::from(spki(id));
         Self {
             certified: Arc::new(CertifiedKey::new(vec![cert], signer)),
+            mtu,
         }
     }
 
@@ -98,7 +113,7 @@ impl Identity {
         let crypto =
             QuicServerConfig::try_from(tls).map_err(|e| TransportError::Io(e.to_string()))?;
         let mut cfg = quinn::ServerConfig::with_crypto(Arc::new(crypto));
-        cfg.transport_config(transport_config()?);
+        cfg.transport_config(transport_config(self.mtu)?);
         Ok(cfg)
     }
 
@@ -122,7 +137,7 @@ impl Identity {
         let crypto =
             QuicClientConfig::try_from(tls).map_err(|e| TransportError::Io(e.to_string()))?;
         let mut cfg = quinn::ClientConfig::new(Arc::new(crypto));
-        cfg.transport_config(transport_config()?);
+        cfg.transport_config(transport_config(self.mtu)?);
         Ok(cfg)
     }
 }
@@ -135,12 +150,25 @@ fn tls_err(e: TlsError) -> TransportError {
     TransportError::Io(e.to_string())
 }
 
-fn transport_config() -> Result<Arc<quinn::TransportConfig>, TransportError> {
+/// A random 16-byte nonce from the TLS provider's RNG (relay `REGISTER`).
+/// `None` only when the OS has no randomness.
+pub(crate) fn random_nonce() -> Option<[u8; 16]> {
+    let mut nonce = [0u8; 16];
+    provider().secure_random.fill(&mut nonce).ok()?;
+    Some(nonce)
+}
+
+fn transport_config(mtu: Mtu) -> Result<Arc<quinn::TransportConfig>, TransportError> {
     let idle = quinn::IdleTimeout::try_from(IDLE_TIMEOUT)
         .map_err(|_| TransportError::Io("idle timeout out of range".into()))?;
     let mut t = quinn::TransportConfig::default();
     t.keep_alive_interval(Some(KEEP_ALIVE));
     t.max_idle_timeout(Some(idle));
+    if mtu == Mtu::RelaySafe {
+        t.initial_mtu(RELAY_SAFE_MTU);
+        t.min_mtu(RELAY_SAFE_MTU);
+        t.mtu_discovery_config(None);
+    }
     Ok(Arc::new(t))
 }
 
