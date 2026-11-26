@@ -32,6 +32,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The nsh CLI release. Must match the `nsh-core` pin in crates/lattice-deck*/Cargo.toml.
+  NSH_VERSION: v0.7.0
 
 jobs:
   plan:
@@ -129,8 +131,11 @@ jobs:
       # NSH 0.7 (docs/architecture/09-platform-l1.md, run table).
       - name: Install nsh
         run: |
-          brew install longbridge/tap/nsh
-          nsh --version
+          curl -fsSL "https://github.com/longbridge/nsh/releases/download/${NSH_VERSION}/install.sh" | sh
+          echo "$HOME/.nsh/bin" >> "$GITHUB_PATH"
+          got=$("$HOME/.nsh/bin/nsh" --version)
+          echo "$got"
+          case "$got" in *"${NSH_VERSION#v}"*) ;; *) echo "expected nsh ${NSH_VERSION#v}" >&2; exit 1 ;; esac
       - name: Package Lattice.app
         working-directory: crates/lattice-deck
         run: nsh package --target macos -o ../../dist-app
