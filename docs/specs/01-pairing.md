@@ -91,6 +91,7 @@ Data dir: macOS `~/Library/Application Support/lattice`; Linux `$XDG_DATA_HOME/l
 | `deck/node.key` | deck, `lattice` | 32 secret bytes, mode 0600 |
 | `deck/workers` | deck, `lattice` | worker list: one worker per line, `<node id> <ip:port> <name>` |
 | `deck/invite.lock` | deck, `lattice invite` | empty; locked while an invite is open (rule 2) |
+| `worker.addr` (runtime dir) | `latticed` | `<node id>@<ip:port>`, mode 0600. Written only once `latticed` serves (04-worker.md, `latticed`) |
 
 Lines starting with `#` and blank lines are ignored. The name is the rest of the line.
 Writers write a temporary file in the same dir, sync it to disk, then rename it over the old file.
