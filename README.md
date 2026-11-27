@@ -64,7 +64,7 @@ Options: `--version dev|latest|vX.Y.Z`, `--bin-dir DIR`, `--app-dir DIR`, `--dry
 docker run -d -p 7400:7400/udp -v lattice-relay:/data ghcr.io/idnwit/lattice-relay:latest
 ```
 
-Builds come from `.github/workflows/release-artifacts.yml`.
+Builds come from `.github/workflows/release-artifacts.yml`. Every release's notes list the image tags, its digest and a `docker run` example.
 
 ## Try the M1 PoC (macOS)
 
