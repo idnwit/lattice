@@ -78,6 +78,7 @@ Rules:
 | Thing | Streams |
 |---|---|
 | Apps and instances on a worker | `worker/apps` State · actions `create`, `close` (06-apps.md) |
+| Worker config | `worker/config` State: resolved values, sources, `read_at`. No actions in v1 (specs/10-settings.md) |
 | Shell (`terminal` instance) | `inst/<iid>/state` State (screen, scrollback) · actions `input`, `resize` |
 | claude-code (`coding_agent` instance) | TBD after M1 |
 | Worker health (`metrics` instance) | `inst/<iid>/state` State (rollups) · TBD: keep `Series` or fold it into typed state? |

@@ -183,7 +183,15 @@ One tag table serves every message:
 ## `latticed`
 
 - Runs one runner per app instance (06-apps.md). Built-in runners are native in M1; WASM from M4.
-- Start order: connect to `latticed-proc` first. When it does not answer, `latticed` exits with an error that names the socket path, and writes no file. Then it binds QUIC, installs the cached packages, writes `worker.addr` (specs/01-pairing.md, Files), and serves.
+- Start order (planned, M2.9; specs/11-control-socket.md, rule 1):
+  1. Lock: prepare `worker/` (mode 0700, no symlink, own uid) and take the exclusive `flock` on it. Taken: exit with `worker.already_running`.
+  2. Key: load `worker/node.key`. Not 32 bytes: exit with `worker.bad_key`, never overwrite it.
+  3. Control socket: unlink a stale `worker/latticed.sock`, bind it.
+  4. Connect to `latticed-proc`. No answer: exit with an error that names the socket path, and write no other file.
+  5. Bind QUIC.
+  6. Install the cached packages.
+  7. Serve.
+- M1 code skips steps 1 and 3: it connects to `latticed-proc` first, then loads the key, binds QUIC, installs packages, writes `worker.addr` in the runtime dir, and serves. D53 removes `worker.addr`.
 - The `terminal` runner holds a VT emulator behind `trait Emulator`. Uses `vt100` (pure Rust, no I/O, builds for `wasm32-unknown-unknown`); evaluate `libghostty-vt` later. Not covered yet: concealed text (`SGR 8`), strikeout, buffered synchronized updates.
 - Publishes one stream per state tree, `inst/<iid>/<tree>` (02-sync.md). Decks get the current tree, then changes.
 - **Restart recovery**: `List`, then per journal: new runner from `meta`, `start` with effects dropped, `Subscribe{from_off: start_off}`, replay to `end_off`, then live.

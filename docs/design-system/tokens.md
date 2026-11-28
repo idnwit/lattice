@@ -37,9 +37,22 @@ Accent is user-selectable: `#5CC8E8` (default), `#E8A33D`, `#9BE36B`, `#B48CFF`.
 
 TBD: the canvas labels offline `#5A6369` but draws its ring in `#6B747B`. Which is canonical?
 
+Relay RTT level (specs/02-connectivity.md › Relay status). Glyph: 3 signal bars, so it never looks like a link dot or ring. Each level differs in the number of filled bars, not only hue. Unfilled bars are 1px outlines in `fg/dim` (5.5:1 on `bg/1`, above the 3:1 non-text minimum). Thresholds 50 ms and 150 ms are proposed.
+
+| Level | Hex | Glyph | Meaning |
+|---|---|---|---|
+| `rtt/good` | `#46C46E` | 3 of 3 bars filled | RTT < 50 ms |
+| `rtt/fair` | `#E8C15A` | 2 of 3 bars filled | RTT 50–150 ms |
+| `rtt/poor` | `#F26D6D` | 1 of 3 bars filled | RTT > 150 ms |
+| `rtt/down` | `#F26D6D` | 3 empty bars with a cross | Down or unregistered |
+
+Contrast on `bg/1`: `#46C46E` 8.3:1, `#E8C15A` 10.8:1, `#F26D6D` 6.4:1. TBD: bar sizes (proposed: 3 bars on the 16px icon grid, heights 4/7/10px, 2px wide, 1px gap)?
+
 A tab or session shows the glyph of its busiest child. Priority: waiting > error > agent > online/relay > idle > offline. TBD: confirm priority order.
 
 Git marks: `M` `#E8C15A`, `A` `#46C46E`, `D` `#F26D6D` (deleted path also struck through).
+
+Modified setting: no state hue. A 2px `fg/muted` left bar and the text `modified · default <value>` carry it (components.md › Settings row).
 
 ## Terminal ANSI 16 (tuned for `bg/0`)
 
@@ -102,5 +115,5 @@ Git marks: `M` `#E8C15A`, `A` `#46C46E`, `D` `#F26D6D` (deleted path also struck
 ## Icons
 
 16px grid, 1.5px stroke, round caps and joins, `currentColor`. Decorative icons get `aria-hidden="true"`.
-Set: `terminal`, `split-v`, `split-h`, `git-branch`, `folder`, `worker`, `agent`, `pair-qr`, `cloud-sync`, `p2p-link`, `search`, `new`.
+Set (`signal-bars` included for the Relay RTT level): `terminal`, `split-v`, `split-h`, `git-branch`, `folder`, `worker`, `agent`, `pair-qr`, `cloud-sync`, `p2p-link`, `search`, `new`, `gear` (Settings button), `sliders` (Settings tab), `lock` (read-only value), `signal-bars` (Relay RTT level). TBD: add the last four to the Foundations artboard.
 Source SVGs: Foundations artboard on the canvas.

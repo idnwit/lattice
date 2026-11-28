@@ -21,7 +21,7 @@ Visual source: [design canvas](https://claude.ai/artifact/XgswugNGzHbdYaWjpYDDhe
 | [tokens.json](tokens.json) | Machine-readable tokens. Single source for code |
 | [tokens.md](tokens.md) | Color, state glyphs, ANSI, type, spacing, density, radius, elevation, motion, icons |
 | [components.md](components.md) | Buttons, inputs, tabs, pane header, rows, cards, palette, toast, toggles, chips |
-| [patterns.md](patterns.md) | Screen layouts: desktop workspace, agent views, opening content, mobile |
+| [patterns.md](patterns.md) | Screen layouts: desktop workspace, agent views, opening content, settings, mobile |
 
 ## Platforms
 

@@ -34,13 +34,13 @@ QUIC sees one stable virtual peer address per NodeId. Our socket picks the real 
 4. Path rules:
    - Go direct when a probe round-trip succeeds both ways.
    - Fall back to relay when the direct path is silent for 2 s while the relay is alive.
-   - Relay registration and keepalive never stop.
+   - The home relay registration and its keepalive never stop, until a relay id error (Relay rules 26–28). Extra registrations end as Connect sequence step 7 says.
 5. **Duplicate during switch**: for 1–2 s after a switch, send each packet on both paths. QUIC drops duplicates by packet number.
 6. **Congestion reset**: a wrapper `ControllerFactory` resets cwnd when the socket signals a path switch. RTT re-converges from new samples.
 7. **MTU**: quinn's UDP payload is fixed at 1200 bytes, with PMTUD off. A packet plus the 41-byte `SEND` header is 1241 bytes, so it fits the relay path. PMTUD cannot see path changes.
 8. **Virtual address**: each peer gets `240.0.0.0/4` (RFC 1112 class E, never routed). IP = `0xF0000000 | (node_id[0..4] as u32 & 0x0FFFFFFF)`, port = `node_id[4..6]` (big-endian). Port 0 becomes 1. It lives only inside the socket and never goes on the wire.
 9. Two peers with the same virtual address: the second one takes the next port up, at most 16 ports (proposed). One socket maps at most 4,096 peers (proposed): a `RECV` can name any NodeId. A peer with no free address is dropped, and dialing it fails with `transport.unreachable`. On an IPv6 socket quinn sees each virtual address in its v4-mapped form. TBD: replace this placeholder scheme?
-10. A datagram that is neither a relay message from the relay address nor QUIC from a known direct address is dropped.
+10. A datagram that is neither a relay message from a relay the node holds or is attempting a registration at, nor QUIC from a known direct address, is dropped.
 
 Known cost: quinn does not know the path changed. direct → relay may cause a short burst of loss or spurious PTO (hundreds of ms to ~1–2 s). Acceptable for terminal traffic.
 
@@ -55,7 +55,7 @@ REGISTER   [0x01][node_id 32][nonce 16][ts 8][sig 64][cookie 16]   sig = ed25519
 REG_OK     [0x02][token 8][observed addr 18][ttl 2][nonce 16]   nonce echoes the REGISTER
 KEEPALIVE  [0x03][token 8][pad 10]                      pad is zero; as long as PONG
 PONG       [0x04][observed addr 18]                      detects NAT rebinding
-COOKIE     [0x05][cookie 16][nonce 16]                       answers a REGISTER without a valid cookie
+COOKIE     [0x05][cookie 16][nonce 16][relay_id 32]          answers a REGISTER without a valid cookie
 SEND       [0x10][token 8][dst node_id 32][QUIC packet]
 RECV       [0x11][src node_id 32][QUIC packet]
 PUNCH_REQ  [0x20][token 8][dst node_id 32][candidates]
@@ -72,6 +72,7 @@ Fields:
 | `observed addr` | 16-byte IPv6 address (IPv4 as v4-mapped `::ffff:a.b.c.d`), then a 2-byte port |
 | `candidates` | Raw bytes. TBD: encoding, decided with hole punching (M2.5) |
 | `pad` | Zero bytes on send. The relay ignores their value, not their length |
+| `relay_id` | The relay's ed25519 public key, 32 bytes (rule 24) |
 
 Bytes after the fixed fields of a fixed-size message are ignored. Later versions may append fields there.
 
@@ -97,9 +98,17 @@ Rules:
 18. Cookie (return routability): a `REGISTER` whose cookie is not valid for its source address gets a `COOKIE` and changes nothing. A sender with a spoofed address never sees the cookie, so it never creates relay state.
 19. Cookie = first 16 bytes of `blake3::keyed_hash(secret, bucket || ip 16 || port 2)`. `bucket` = `unix_secs / 30`, 8 bytes big-endian. `ip` is the v4-mapped IPv6 form. A cookie is valid in its bucket and the next one. All-zero means no cookie. Each relay process draws a random 32-byte secret at start.
 20. Rate limit, after a valid cookie: each source (an IPv4 address or an IPv6 /64) gets at most 10 `REGISTER` per second, burst 20 (proposed). An IPv6 address also spends from its /48: 100 `REGISTER` per second, burst 200 (proposed). A `REGISTER` passes only when every bucket it spends from has room. Excess is dropped. A v4-mapped IPv6 address is its IPv4 source. Each tier tracks at most 65,536 buckets (proposed). When a tier is full, a new bucket evicts the least recently used one. So holding many buckets never locks a new source out. Nodes behind one IPv4 address (carrier-grade NAT) share its budget. TBD: does the relay need a per-node tier for carrier-grade NAT?
-21. `COOKIE` is 33 bytes, smaller than the 137-byte `REGISTER`, so it cannot amplify. It echoes the `REGISTER` nonce.
+21. `COOKIE` is 65 bytes, smaller than the 137-byte `REGISTER`, so it cannot amplify. It echoes the `REGISTER` nonce. A relay from before rule 24 sends 33 bytes, without `relay_id`.
 22. The client keeps the cookie of a `COOKIE` whose nonce matches its last `REGISTER`, and sends a `REGISTER` with it at once. This holds registered or not. It reuses the cookie until the relay sends a new one. A late, duplicate or spoofed `COOKIE` is ignored.
-23. No relay reply is bigger than the request that caused it: `COOKIE` 33 and `REG_OK` 45 answer a 137-byte `REGISTER`, and `PONG` 19 answers a 19-byte `KEEPALIVE`. A spoofed source never gets more bytes than the sender spent.
+23. No relay reply is bigger than the request that caused it: `COOKIE` 65 and `REG_OK` 45 answer a 137-byte `REGISTER`, and `PONG` 19 answers a 19-byte `KEEPALIVE`. A spoofed source never gets more bytes than the sender spent.
+
+Rules 24–28 are planned (M2.8).
+
+24. Relay id pin (D50): `COOKIE` carries the relay's id, appended after the fixed fields. `relay_id` is present only when the body after the type byte is at least 64 bytes (65 bytes in total). A shorter `COOKIE` (33 to 64 bytes) has no id; bytes past the fixed fields are then ignored. The client reads the id only from a `COOKIE` whose nonce matches its last `REGISTER` (rule 22).
+25. A client with no expected id for the relay signs over an all-zero `relay_id` and always sends an all-zero cookie. So the relay answers `COOKIE` before it checks the signature (rule 17). A re-pin clears the expected id and the cached cookie of that relay.
+26. The client compares the id in a `COOKIE` with its expected id: the pin, or the id in the peer's public address. No expected id: it pins this one (specs/02-connectivity.md, rule 21). A `COOKIE` with no id and no expected id: `relay.no_id`.
+27. The client signs every `REGISTER` after the pin over the expected id. The relay drops a `REGISTER` signed over another id (rule 17).
+28. A `COOKIE` with another id is treated as spoofed: the client ignores it, keeps its cookie, and keeps retrying (rule 13). After a mismatched `COOKIE` the client sends the next `REGISTER` at once, without the 5 s wait, so `ID_MISMATCH_LIMIT` attempts fit inside the 5 s connect budget (Connect sequence step 3). Only after `ID_MISMATCH_LIMIT` = 3 (proposed) consecutive `REGISTER` attempts that bring only mismatched ids and no `REG_OK` does it stop and report `relay.id_changed`, or `relay.id_mismatch` for a peer's address. A `REG_OK` resets the count.
 
 ## Relay invariants
 
@@ -114,20 +123,31 @@ Checks per [.rules/verification.md](../../.rules/verification.md).
 7. A `REGISTER` without a valid cookie for its source creates no relay state. Check: tests `register_without_a_valid_cookie_gets_one_and_changes_nothing`, `a_cookie_is_bound_to_its_address_and_two_buckets`, known-answer test `the_cookie_matches_the_rule_19_vector`.
 8. A flood from one key or one source never blocks another node from registering. Check: tests `a_register_flood_from_one_key_never_blocks_another_node`, `a_flooding_source_is_rate_limited`, `a_source_over_its_rate_gets_no_reg_ok`, `an_ipv6_slash_64_is_one_source`, `an_ipv6_slash_48_has_its_own_budget`, `a_full_source_table_evicts_the_idle_most_source`, `a_refused_register_creates_no_source_state`, `a_refusal_in_one_tier_charges_neither`.
 9. No relay reply is bigger than its request (rule 23). Check: tests `no_reply_is_bigger_than_its_request`, `a_short_keepalive_gets_no_pong`.
+10. A client never sends a valid `REGISTER` for a relay id other than its expected id, and never adopts an id from a `COOKIE` whose nonce does not match (rules 24–28). Check (planned): tests `a_peer_address_id_overrides_first_contact`, `a_cookie_without_an_id_and_no_pin_is_refused`, `a_stale_cookie_never_sets_the_pin`, `a_client_without_an_id_sends_an_all_zero_cookie`, `a_repin_clears_the_cached_cookie`, `a_peer_address_with_another_id_than_the_pin_dials_nothing`.
+11. `COOKIE` decodes with `relay_id` exactly when it is 65 bytes or longer; 33 to 64 bytes decode without it; fewer than 33 bytes fails with `CodecError::Truncated`. Check (planned): proptest `every_message_roundtrips` with and without `relay_id`; test `cookie_lengths_33_34_64_65_decode_as_specified`; fuzz target `relay_decode` seeded with those lengths.
+12. A single mismatched `COOKIE` never stops registration; only `ID_MISMATCH_LIMIT` consecutive mismatched attempts with no `REG_OK` do (rule 28). Check (planned): proptest `a_single_mismatched_cookie_never_stops_registration`; test `three_mismatched_attempts_report_id_changed`.
 
 ## Path invariants
 
 1. The selector moves to direct only on a validated probe. Check: proptest `switches_only_on_probe_or_direct_silence`.
 2. It moves back to relay only after 2 s of direct silence while the relay is alive. Check: same proptest; tests `relay_fallback_after_two_seconds_of_direct_silence`, `no_fallback_while_relay_is_dead`.
 3. Each switch opens exactly one duplicate window. Check: same proptest.
+4. A relay datagram is accepted only from a relay the node holds or is attempting a registration at (Paths rule 10). Check (planned): test `a_relay_datagram_from_an_unregistered_relay_is_dropped`.
+5. A reply to a peer on a relay path goes through the relay that delivered that peer's last `RECV` (Connect sequence step 6). Check (planned): proptest `a_reply_goes_via_the_relay_of_the_last_recv`.
+6. An extra registration ends within `ttl` after its last connection closes; the home registration never ends, until a relay id error (Relay rules 26–28; step 7). Check (planned): simulation test `an_extra_registration_ends_within_ttl_of_its_last_close`.
 
 ## Connect sequence
 
-1. Worker registers with its home relay on start and keeps it alive.
-2. Deck knows the worker's NodeId and home relay from pairing (synced in the user Doc).
-3. Deck registers with the same relay and sends QUIC Initial via `SEND`. Traffic flows on the relay at once. `connect` waits at most 5 s for the registration, then fails with `transport.unreachable`.
+Per-node home relay, dial via the target's relay (D49). Steps 1–3 and 6–8 as written here are planned (M2.8); M1 code dials `ip:port` directly. User-visible rules: [specs/02-connectivity.md](../specs/02-connectivity.md) › Relay.
+
+1. Every node registers with its own home relay on start and keeps that registration alive. Relay `none`: no home registration; the node is reached at `ip:port`. `none` governs only the home relay: a node with `none` may still register at a peer's relay to dial it (step 3).
+2. The dialer learns the target's peer record `(NodeId, Contact)` (specs/01-pairing.md › Contact) from pairing (`deck/workers`, specs/01-pairing.md) or the user Doc (M2.6).
+3. The dialer registers at the target's relay, unless it is registered there already. It takes the relay id from the address (Relay rules 26 and 28). If the dialer already holds a registration or a pin for that canonical `host:port` with another relay id, it fails with `relay.id_mismatch` and dials nothing. It then sends QUIC Initial via `SEND`. Traffic flows on the relay at once. `connect` waits at most 5 s for the registration, then fails. Failure precedence: any relay id mismatch seen during the attempt gives `relay.id_mismatch`; otherwise `transport.unreachable`.
 4. In parallel: `PUNCH_REQ` → both sides get `PUNCH_GO` → simultaneous probes every 50–100 ms for ~5 s.
 5. A probe round-trip validates the direct path. The magic socket switches to it; the relay stays registered as backup.
+6. The target answers a peer through the relay that delivered that peer's `RECV`. Different home relays are normal.
+7. A node holds one registration per relay it uses: its home relay, plus each target's relay. An extra registration lives while a connection through it is open (proposed). Then the node stops its keepalives and the relay expires it after `ttl`.
+8. One registration per NodeId per relay. Only the process that holds a node key registers or dials with it: `latticed` on a worker, the deck GUI on a deck. The worker CLI hands pairing to `latticed` over its control socket (D53; specs/11-control-socket.md).
 
 ## Hole punching
 
@@ -200,3 +220,4 @@ Not in v1. Design kept open:
 - **UDP blocked** (some corporate networks): no fallback in v1. TBD: add a TCP/WebSocket relay path later?
 - Path switches are invisible to quinn: brief hiccup on direct → relay (mitigated by duplicate sending and cwnd reset).
 - Relay abuse (amplification, DoS): address-bound tokens now, rate limits later.
+- Relay id pin is trust on first use: see [03-identity-security.md](03-identity-security.md) › Threat notes.

@@ -74,7 +74,7 @@ Same model, thumb-first. All rows ≥ 44px. Radius `r/12` on sheets.
 | Terminal | App bar (session, worker, link, `⇄n`) · tabs · pane switcher ("pane 1/3", swipe ⇆) · terminal · global approval card · extra keys · input |
 | Sessions drawer | Sessions grouped by worker · `+ New` · WORKERS (n/m online) · `Add worker` |
 | Tools sheet | Bottom sheet over dimmed terminal: Ports / Git / Files / Agents |
-| Add worker (proposed) | Bottom sheet, `r/12`, 16px gutter: header + close · "Run this on the worker:" · invite command (wraps) · `Copy` (primary, full width) · status · helper · `New invite` once expired or failed. Opens from the drawer `Add worker` |
+| Add worker (proposed) | Bottom sheet, `r/12`, 16px gutter: header + close · "Run this on the worker:" · invite command (wraps) · `Copy` (primary, full width) · status · helper · `New invite` next to a `Waiting` invite and once it ended (as desktop, specs/01 UI rule 6). Opens from the drawer `Add worker` |
 | Agent session | Visual or Terminal · sticky approval in both · composer |
 | Files as tabs | Long-press sheet: Open as tab, Open as pane, OPEN WITH, OPEN IN IDE ON DESKTOP |
 | Attach / voice | Attach sheet: Paste image, Photo library, Take photo, File from worker… |
@@ -82,6 +82,31 @@ Same model, thumb-first. All rows ≥ 44px. Radius `r/12` on sheets.
 Splits become swipeable pages on mobile. Live ports open in the in-app browser; long-press copies the URL.
 
 TBD: Mobile Add worker is a proposal (D47 names no iOS UI). Sheet or full screen, and what confirms `Copy`?
+
+## Settings — artboards "Settings registry", "Settings tab", "Settings · Connectivity", "Settings · worker", "Raw settings.toml", "Mobile — Settings", "Mobile — Settings · Connectivity"
+
+Behavior: [specs/10-settings.md](../specs/10-settings.md). Opens as a tab (`sliders` icon, `Settings`) in the tab bar.
+
+```
+┌ tabs: api-server · Settings ─────────────────────────────────────────────────┐
+│ [search ⌘F] [User | This deck] scope note                    {} TOML ⌘⇧,     │
+├ tree 232 ────────┬ content (max 820) ────────────────────────────────────────┤
+│ Appearance       │ Connectivity   lattice.connectivity · n settings          │
+│ Keyboard         │ STATUS · read-only · live              Test relay ⌘⇧T     │
+│ Connectivity     │  relay rtt · registration · address · keepalive · peers   │
+│ Workers ▾        │ RELAY  rows…                                              │
+│   build-01       │ PATH   rows…                                              │
+│ Apps ▾           │                                                           │
+│   Terminal       │                                                           │
+└──────────────────┴───────────────────────────────────────────────────────────┘
+```
+
+- Header bar `bg/1`: search Input (with `⌘F` kbd), scope Segmented control, scope note (`Synced to all your decks` / `Overrides User on this deck only`), `{}` secondary button.
+- Tree `bg/1`, rows `row/sm`. Selected node: `bg/3` + 2px `fg/muted` left; the bar turns `accent` only while the tree has keyboard focus (specs/10 rule 22). Worker nodes carry their link glyph; app nodes carry an `error` count when a value fails.
+- Content: section `label` heads over Settings rows. Worker pages start with the Read-only notice.
+- Status block: Relay RTT level, registration, public address, last keepalive, then one Link chip per peer.
+- Mobile: list of grouped sections (Deck, Workers, Apps; `r/12` cards, rows at least `row/touch`) → drill-down page per section. Status first on Connectivity. No TOML view.
+- TOML view: read-only in v1 (specs/10 rule 26, D51). No `Save`.
 
 ## Add worker (desktop, D47) — artboard "Desktop — Add worker · invite flow · no worker · link states"
 
@@ -92,6 +117,6 @@ The `+` at the end of the worker rail opens a dialog over the workspace: `bg/1` 
 | Header | `Add worker` · close (`Escape`) |
 | Lead | "Run this on the worker:" |
 | Command | Invite command component · `Copy` (primary) |
-| Status | State glyph + mono meta: `waiting for worker…` (waiting), `pairing…` (idle), `paired · build-01` (online), `expired` (offline), error code (error) |
+| Status | State glyph + mono meta: `registering…` (idle), `waiting for worker…` (waiting), `paired · build-01` (online), `expired` (offline), error code (error) |
 | Helper | "Expires in 5 min. One use." |
-| Footer | `New invite` (secondary) once the invite expired or failed |
+| Footer | `New invite` (secondary): replaces the invite (specs/01 UI rule 6) |

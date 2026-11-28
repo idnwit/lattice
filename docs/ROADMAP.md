@@ -8,7 +8,7 @@ Owns: milestone order, milestone scope, and exit criteria. Behavior lives in [sp
 Four milestones, each one a working product slice:
 
 1. **M1** Platform frame, app instances, and the terminal app over a direct link.
-2. **M2** Relay, hole punching, real pairing, iOS deck.
+2. **M2** Relay (per-node home relay), hole punching, real pairing, settings, iOS deck.
 3. **M3** First coding agent: Claude Code.
 4. **M4** WASM runtime for runners and viewers, with node metrics as the first example.
 
@@ -34,14 +34,14 @@ Status values: `done` (exit criteria met and tested), `partial` (code landed, a 
 | M1.4b | Apps runner: `worker/apps`, `create`/`close`, params validation, state stream with a 1024-delta queue, `terminal` app | `lattice-worker`, `lattice-sync-proto` | `create{terminal}` opens a journal and a shell. `close` waits for exit, then drops it. Two instances never read each other's state. A shell `exit` closes the instance | done (WASM runner, D42) |
 | M1.4c | Restore from journals: rebuild runners from `meta`, replay with effects dropped, `clear` trims, `Gap` marks `degraded` | `lattice-worker` | After a `latticed` restart every instance returns with the same `iid` and screen. Replay writes nothing to a PTY | done: restore and replay unit-tested; `an_instance_survives_a_latticed_restart` (`crates/lattice/tests/restart.rs`) |
 | M1.5 | Direct-only transport: quinn on a plain UDP socket, TLS bound to the ed25519 node key, NodeId pinning | `lattice-quic`, `lattice-transport` | Two local processes echo on a bi stream. A wrong NodeId is refused | done |
-| M1.6 | One-shot pairing by invite command (D47) | `lattice`, `latticed`, `lattice-worker`, `lattice-deck` | See [M1.6 pairing](#m16-pairing) | done: `lattice invite`, `lattice add-deck`, the deck `Add worker` dialog |
-| M1.7 | Headless deck: worker link, session and pane model, create and close client, state subscriptions, `lattice attach` as a minimal terminal client | `lattice-deck-core`, `lattice` | A `terminal` instance on worker B is created and used from machine A over a LAN | done: link, create/close, subscriptions, `lattice attach`; checked over a LAN address on one host |
-| M1.8 | macOS deck: `DeckState` replaces fixtures; terminal widget, input, resize, worker status | `lattice-deck` | Tabs and split panes work. `vim` and `htop` render correctly | done: tabs, splits, terminal viewer, resize, worker status with reconnect; `vim` and `htop` screens checked with `lattice probe` |
+| M1.6 | One-shot pairing by invite command (D47) | `lattice`, `latticed`, `lattice-worker`, `lattice-deck` | See [M1.6 pairing](#m16-pairing) | done: `lattice add-deck`, the deck `Add worker` dialog. M2.9 replaces this flow (D53): the deck-side CLI is removed |
+| M1.7 | Headless deck core: worker link, session and pane model, create and close client, state subscriptions | `lattice-deck-core` | A `terminal` instance on worker B is created and used from machine A over a LAN | done: link, create/close, subscriptions; checked over a LAN address on one host. Its CLI client is removed (D53) |
+| M1.8 | macOS deck: `DeckState` replaces fixtures; terminal widget, input, resize, worker status | `lattice-deck` | Tabs and split panes work. `vim` and `htop` render correctly | done: tabs, splits, terminal viewer, resize, worker status with reconnect; `vim` and `htop` screens checked with a CLI client that D53 removes |
 | M1.9 | Model proof: `latticed` restarts mid-session; the instance restores; the deck reconnects and replays from its offset | all | An end-to-end test shows the process and its instance survive. Output is complete, except ranges reported as a gap | done: `an_instance_survives_a_latticed_restart` |
 
 ### M1.6 pairing
 
-Pairing follows the invite flow in [specs/01-pairing.md](specs/01-pairing.md) (D47): the deck shows `lattice add-deck <invite code>`, the user runs it on the worker, and the worker calls the deck back.
+M1 shipped this flow (D47). M2.9 replaces it with the single-owner, one-round-trip flow of [specs/01-pairing.md](specs/01-pairing.md) (D53). The list below records M1.
 
 1. The deck's `+` on the worker rail opens `Add worker`: the command, `Copy`, and the pairing status.
 2. The invite carries the deck NodeId, the deck `ip:port`, a 32-byte one-time secret, and an expiry 5 minutes ahead.
@@ -82,10 +82,17 @@ Goal: deck and worker behind different NATs connect at once through the relay, t
 | M2.3 | Magic socket: relay and direct paths under one virtual address | `lattice-quic` | partial: relay path, virtual addresses, 1200-byte MTU; `connect_via_relay_then_echo_on_a_bi_stream` passes. Direct path and cwnd reset land with M2.5 |
 | M2.4 | `PathSelector`: relay first, direct after a probe, back to relay after 2 s of direct silence | `lattice-transport` | done: unit tests and a seeded simulation proptest; not yet driven by the socket (M2.5) |
 | M2.5 | Hole punching: candidate exchange and punch nonce | `lattice-quic` | todo |
-| M2.6 | Pairing per [specs/01-pairing.md](specs/01-pairing.md): 6-character code, PAKE, signed device list, content key | identity crate (new) | todo |
+| M2.6 | Signed device list and content key ([architecture/03-identity-security.md](architecture/03-identity-security.md)); the M1 allowlist and worker list migrate into it. PAKE stays a TBD there | identity crate (new) | todo |
 | M2.7 | iOS deck: QR scan, network changes, path switches | `lattice-deck` | todo |
+| M2.8 | Per-node home relay (D49): each node registers at its own relay; public address; the dialer registers at the target's relay; several registrations per socket. Relay id pin by trust on first use, `COOKIE` carries `relay_id` (D50) | `lattice-relay-proto`, `lattice-relay`, `lattice-quic`, `lattice-transport` | todo: the magic socket holds one `HomeRelay`, and `RelayClient` needs the relay id up front |
+| M2.9 | Pairing per D53: invite `{deck, Contact, secret}` without expiry; one round trip `PairRequest` → `PairOk`; `latticed` pairs and serves `worker/latticed.sock` (`AddDeck`, `ConfigList`, `ConfigGet`); `lattice add-deck` reads the code from stdin; `deck/workers` stores `(NodeId, Contact)`. Removes `latticed add-deck`, `lattice invite`, `lattice attach`, `lattice probe`, `worker.addr`, the lock files ([specs/01-pairing.md](specs/01-pairing.md)) | `lattice-sync-proto`, `lattice-deck-core`, `lattice-deck`, `lattice-worker`, `latticed`, `lattice` | todo |
+| M2.10 | Relay status: registration state, public address, relay RTT from `KEEPALIVE`→`PONG`, RTT levels, link chips `via <relay>`, `Test relay` ([specs/02-connectivity.md](specs/02-connectivity.md) › Relay status) | `lattice-relay-proto`, `lattice-quic`, `lattice-deck` | todo |
+| M2.11 | Worker config: `config.toml` with `latticed` as its only writer, live relay reload, the `worker/config` State stream, `lattice config` (`ConfigList`, `ConfigGet`, `ConfigSet`, `ConfigReset`, `ConfigReplace`), the relay prompt and the user services in `install.sh` (specs/10 rules 47–58) ([specs/10-settings.md](specs/10-settings.md) › Worker config) | `latticed`, `lattice`, `install.sh` | todo |
+| M2.12 | Settings registry, scopes, and the deck Settings tab (desktop and mobile), read-only worker pages from `worker/config`, `app.toml` `[settings]` (D51) | `lattice-deck`, `lattice-deck-ui`, `lattice-app`, `lattice-package` | todo |
 
-Done when: losing the direct path falls back to relay without dropping the session. The M1 allowlist migrates into the device list.
+TBD: end-to-end tests that use `lattice probe` or read `worker.addr` (`an_instance_survives_a_latticed_restart`, ROADMAP M1.9) need a replacement, for example an in-process deck harness. Which one?
+
+Done when: losing the direct path falls back to relay without dropping the session. A deck and a worker on different home relays pair and connect. The M1 allowlist migrates into the device list.
 
 ## M3 — First coding agent: Claude Code
 
