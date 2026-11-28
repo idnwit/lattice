@@ -21,7 +21,12 @@ fn key(seed: u8) -> NodeKey {
 
 /// Minimal relay loop for tests. Mirrors `lattice-relay`'s driver.
 async fn spawn_relay(bind: &str) -> HomeRelay {
-    let relay_key = key(100);
+    spawn_relay_keyed(bind, 100).await
+}
+
+/// [`spawn_relay`] with the relay key of `seed`.
+async fn spawn_relay_keyed(bind: &str, seed: u8) -> HomeRelay {
+    let relay_key = key(seed);
     let sock = UdpSocket::bind(bind).await.unwrap();
     let addr: SocketAddr = sock.local_addr().unwrap();
     let mut engine = RelayEngine::new(relay_key.node_id(), DEFAULT_TTL, [7; 32]);
@@ -124,4 +129,40 @@ async fn connect_without_a_reachable_relay_is_unreachable() {
     let err = deck.connect(key(1).node_id()).await.unwrap_err();
     assert_eq!(err, TransportError::Unreachable);
     assert!(started.elapsed() < std::time::Duration::from_secs(7));
+}
+
+/// specs/10-settings.md, rule 35: a new home relay applies on the live transport.
+#[tokio::test]
+async fn a_home_relay_change_re_registers_without_rebinding() {
+    // The worker starts at a relay that never answers, then moves to a live one.
+    let silent = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let dead = HomeRelay::new(silent.local_addr().unwrap(), key(101).node_id());
+    let live = spawn_relay_keyed("127.0.0.1:0", 102).await;
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let worker = QuicTransport::bind(QuicConfig::new(key(1), dead, bind))
+        .await
+        .unwrap();
+    let before = worker.local_addr().unwrap();
+    let handle = worker.home_relay_handle().unwrap();
+    assert!(handle.set(live));
+    assert_eq!(worker.local_addr().unwrap(), before, "same socket");
+    let deck = QuicTransport::bind(QuicConfig::new(key(2), live, bind))
+        .await
+        .unwrap();
+    let worker_id = worker.local_id();
+    tokio::spawn(async move {
+        let (_peer, conn) = worker.accept().await.unwrap();
+        let _closed = conn.accept_bi().await;
+    });
+    let conn = deck.connect(worker_id).await.unwrap();
+    assert_eq!(conn.remote_id(), worker_id);
+}
+
+#[tokio::test]
+async fn direct_mode_has_no_home_relay_handle() {
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let t = QuicTransport::bind(QuicConfig::direct(key(1), bind).unwrap())
+        .await
+        .unwrap();
+    assert!(t.home_relay_handle().is_none());
 }

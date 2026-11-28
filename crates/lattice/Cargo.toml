@@ -14,11 +14,14 @@ lattice-app.workspace = true
 lattice-app-echo = { workspace = true, default-features = false, features = ["viewer"] }
 lattice-app-terminal = { workspace = true, default-features = false, features = ["viewer"] }
 lattice-builtin-apps.workspace = true
+# `lattice config`: control requests and config.toml (specs/10, specs/11).
+lattice-control.workspace = true
 lattice-deck-core.workspace = true
 lattice-key.workspace = true
 lattice-quic.workspace = true
 lattice-state.workspace = true
-# `lattice attach`: raw mode and window size of the local TTY (safe termios API).
+# `lattice attach`: raw mode and window size of the local TTY (safe termios API);
+# `lattice config`: getuid for the worker dir lock.
 rustix.workspace = true
 # `signal`: SIGWINCH for `lattice attach`; `io-std`, `io-util`: its screen output.
 tokio = { workspace = true, features = ["signal", "io-std", "io-util"] }

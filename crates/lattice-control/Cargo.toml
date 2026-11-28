@@ -1,0 +1,27 @@
+[package]
+name = "lattice-control"
+description = "Worker control socket codec (specs/11) and worker config model (specs/10): config.toml keys, canonical host, relay URL, precedence. Sans-IO, plus the worker dir lock."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# `ConfigReplace.base_hash` (specs/11, Messages).
+blake3.workspace = true
+lattice-key.workspace = true
+postcard.workspace = true
+# flock on the `worker/` dir (specs/11, rule 1 step 1).
+rustix.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+# Parses `config.toml` (specs/10, Worker config).
+toml.workspace = true
+
+[dev-dependencies]
+postcard = { workspace = true, features = ["use-std"] }
+proptest.workspace = true
+
+[lints]
+workspace = true

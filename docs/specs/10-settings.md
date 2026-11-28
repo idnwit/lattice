@@ -2,7 +2,7 @@
 
 Status: draft
 Owns: the settings registry, scopes and precedence, the settings editor, the worker config file and its `worker/config` stream, the `lattice config` CLI, the relay prompt of `install.sh`.
-Planned (M2.11/M2.12): nothing in this spec is implemented yet.
+Implemented (M2.11, partial): Worker config, CLI, and Install, in `lattice-control`, `latticed`, `lattice`, and `install.sh`. Planned: the registry, the editor, the `worker/config` stream (rule 15), and the first-contact pin (rules 39–40, M2.8).
 Link behavior and relay status: [02-connectivity.md](02-connectivity.md). Relay mechanism: [architecture/01-transport.md](../architecture/01-transport.md). Decision: D51.
 
 ## Summary
@@ -108,6 +108,13 @@ pinned_for = "relay.example.com:7400"
 addr = "0.0.0.0:7441"
 ```
 
+TBD: the magic socket carries no direct path until ROADMAP M2.5. So a worker with a relay is reachable only through it, and a change between `none` and a relay (rule 35) logs `config.restart_needed`. Apply that change live once direct paths land?
+TBD: the relay client needs the relay id up front until M2.8. An unpinned relay URL logs `relay.no_id`, and `latticed` serves direct only. Keep that fallback, or fail the start?
+TBD: a relay host that does not resolve at start fails the start. Retry instead, for a boot before the network is up?
+TBD: `latticed` polls the file every 1 s for rule 35. Which reload latency does the spec want?
+TBD: a failed read or write of `config.toml` reports `config.io`. Which code?
+TBD: the rule for a `name` value? The code refuses an empty name and control characters.
+
 On a deck the worker keys show as `lattice.worker.<key>` (`lattice.worker.relay.addr`), read-only (rule 14).
 
 ### CLI
@@ -185,7 +192,7 @@ Error codes are proposed. Other codes: `settings.unknown_key`, `settings.invalid
 
 ## Invariants
 
-Checks per [.rules/verification.md](../../.rules/verification.md). All planned.
+Checks per [.rules/verification.md](../../.rules/verification.md). Implemented in `lattice-control` (M2.11).
 
 1. A pin for another relay `host:port` is ignored (rules 29 and 37). Check: test `a_pin_for_another_host_is_ignored`.
 2. An explicit id in the relay URL is never overwritten by a first-contact pin (rule 38). Check: test `an_explicit_id_is_never_overwritten`.

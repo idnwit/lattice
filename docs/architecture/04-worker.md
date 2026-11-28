@@ -191,7 +191,8 @@ One tag table serves every message:
   5. Bind QUIC.
   6. Install the cached packages.
   7. Serve.
-- M1 code skips steps 1 and 3: it connects to `latticed-proc` first, then loads the key, binds QUIC, installs packages, writes `worker.addr` in the runtime dir, and serves. D53 removes `worker.addr`.
+- Between steps 1 and 2, `latticed` reads `config.toml`; an invalid file exits with its code (specs/10-settings.md, rule 36). The control socket serves from step 3 on. Step 5 binds at the configured home relay, or direct.
+- The code still writes `worker.addr` in the runtime dir once serving. D53 removes it (M2.9).
 - The `terminal` runner holds a VT emulator behind `trait Emulator`. Uses `vt100` (pure Rust, no I/O, builds for `wasm32-unknown-unknown`); evaluate `libghostty-vt` later. Not covered yet: concealed text (`SGR 8`), strikeout, buffered synchronized updates.
 - Publishes one stream per state tree, `inst/<iid>/<tree>` (02-sync.md). Decks get the current tree, then changes.
 - **Restart recovery**: `List`, then per journal: new runner from `meta`, `start` with effects dropped, `Subscribe{from_off: start_off}`, replay to `end_off`, then live.

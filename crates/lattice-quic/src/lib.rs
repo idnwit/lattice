@@ -40,6 +40,7 @@
 //! # Key items
 //!
 //! - [`QuicTransport`], [`QuicConn`]: `Transport` / `Conn` implementations.
+//! - [`HomeRelayHandle`]: moves a relay-mode transport to another home relay.
 //! - [`QuicConfig`]: node key, mode (relay or direct-only), bind address.
 //! - [`ConfigError`]: refused configs (non-loopback direct bind).
 //! - [`advertise_ip`]: the local IP a peer reaches us at.
@@ -54,4 +55,4 @@ mod tls;
 
 pub use advertise::{ADVERTISE_ENV, advertise_ip};
 pub use config::{ConfigError, QuicConfig};
-pub use conn::{QuicConn, QuicRecv, QuicSend, QuicTransport};
+pub use conn::{HomeRelayHandle, QuicConn, QuicRecv, QuicSend, QuicTransport};

@@ -10,7 +10,7 @@ Only the process that holds a node key uses it (D53). On a worker that is `latti
 The `lattice` CLI (`add-deck`, `config`) sends one request over a Unix socket in the data dir and gets one reply.
 One `latticed` and one deck GUI run per data dir.
 
-Planned (M2.9). M1 code has no control socket; `latticed add-deck` pairs by itself.
+Implemented (M2.11): rules 1, 3–13 and the `Config*` messages, in `lattice-control`, `latticed`, and `lattice config`. Until pairing moves here (M2.9), `AddDeck` gets `Failed{control.unsupported}` and `latticed add-deck` pairs by itself. Rule 2 (deck) is planned.
 
 ## Behavior
 
@@ -73,7 +73,7 @@ All codes are proposed.
 
 ## Invariants
 
-Checks per [.rules/verification.md](../../.rules/verification.md). All planned.
+Checks per [.rules/verification.md](../../.rules/verification.md). Implemented: 1 (proptest; the fuzz target is planned), 2–5. Planned: 6.
 
 1. Control frame decoding never panics on any bytes. Check: fuzz target `control_decode`, proptest `control_decode_never_panics`.
 2. An unknown request type gets `Failed{control.unsupported}` and never stops the daemon. Check: test `an_unknown_control_request_is_unsupported`.
