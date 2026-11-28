@@ -28,10 +28,11 @@ Platform design: [../architecture/README.md](../architecture/README.md).
 | Component | Runs on | Role |
 |---|---|---|
 | `latticed-proc` | Worker | Frozen process daemon. Owns PTYs and children, raw output ring. Never restarts |
-| `latticed` | Worker | Upgradable connectivity daemon and apps runner. Transport, sync, VT emulation, app instances, hooks, files, SSH endpoint. `latticed add-deck` is the worker side of pairing |
-| `lattice` CLI | Worker, desktop | `lattice add-deck` (worker), `lattice invite` (deck without a GUI; specs/01, CLI), `lattice attach`, `lattice session …`, `lo <file>`, app/layout dev tools |
+| `latticed` | Worker | Upgradable connectivity daemon and apps runner. Transport, sync, VT emulation, app instances, hooks, files, SSH endpoint. It runs the worker side of pairing. From M2.9 it also serves the control socket `worker/latticed.sock` (specs/11) |
+| `lattice` CLI (M1, current) | Worker, desktop | `lattice add-deck` (runs `latticed add-deck`), `lattice invite` (deck without a GUI), `lattice attach`, `lattice probe`. Dropped (D53), effective M2.9 |
+| `lattice` CLI (from M2.9) | Worker | `lattice add-deck` (specs/01, CLI) and `lattice config` (specs/10). Talks to the running `latticed`. No deck commands: the deck is GUI-only (D53). TBD: where `lo <file>` and the app/layout dev tools (06-apps.md) live |
 | Deck | macOS and iOS (v1), web (later) | Rust core (transport, sync, layouts) + NSH UI. 100% Rust |
-| Relay | Public (ours) or self-hosted | UDP forwarder: registration, first path, hole-punch coordination, fallback. Sees ciphertext only |
+| Relay | Public (ours) or self-hosted | UDP forwarder: registration, first path, hole-punch coordination, fallback. Each node picks its home relay. Sees ciphertext only |
 | Ciphertext store | Later, optional | Mailbox/backup for device sync while peers are offline |
 
 ```
@@ -73,9 +74,15 @@ Details: [architecture/04-worker.md](../architecture/04-worker.md), [05-deck.md]
 | View | How an agent pane renders: TTY, Visual, Zoom, Mirrored |
 | Port forward | Mapping `worker:remote → deck localhost:local`, owned by a session |
 | Extension | User-facing name for a `files`-kind app that opens file types or links |
-| Invite | One-time pairing offer from a deck: deck NodeId, `ip:port`, secret, 5-minute TTL. Shown as `lattice add-deck <invite code>` (D47) |
-| Attach | A CLI client (`lattice attach`) bound to one `terminal` instance in a local terminal. Detaching leaves the instance running |
+| Invite | One-time pairing offer from the deck GUI: deck NodeId, deck contact, secret. The deck expires it after 5 minutes. Given to `lattice add-deck` on stdin (D47, D53) |
+| Attach | A CLI client (`lattice attach`) bound to one `terminal` instance in a local terminal. Dropped (D53), effective M2.9 |
 | Allowlist | The decks a worker serves (`worker/decks`). M1 stand-in for the device list |
+| Home relay | The relay a node registers at and keeps alive, set as `udp://host:port`, or `none` for direct only (D49) |
+| Relay id | The relay's ed25519 public key. Signed into `REGISTER`; pinned on first contact (D50) |
+| Public address | A node's contact once registered at its home relay: relay `host:port` and relay id (`Contact::Relay`). The node id is held beside it, never inside. Shown as `relay.example.com:7400 · 7f3a…c91e` |
+| Contact | How peers reach a node: `Relay{host, port, relay_id}` (its public address) or `Direct(ip:port)` when its home relay is `none`. A peer record is `(NodeId, Contact)` (specs/01 › Contact) |
+| Settings registry | The set of setting schemas: platform keys `lattice.*` plus each app's `app.toml` `[settings]`. Only registered keys apply (D51) |
+| Scope | Where a setting value lives: `device` (This deck), `user` (synced Doc), `default` (schema), or `worker` (the worker's `config.toml`) |
 
 ## Spec index
 
@@ -90,3 +97,5 @@ Details: [architecture/04-worker.md](../architecture/04-worker.md), [05-deck.md]
 | 07 | [Media input](07-media-input.md) |
 | 08 | [IDE access](08-ide-access.md) |
 | 09 | [Keyboard](09-keyboard.md) |
+| 10 | [Settings](10-settings.md) |
+| 11 | [Worker control socket](11-control-socket.md) |

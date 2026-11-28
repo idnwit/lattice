@@ -271,7 +271,18 @@ journal_mb = 16
 
 [widgets]
 names = ["terminal"]             # named views for layouts
+
+[settings.font_size]             # one table per setting (specs/10-settings.md, Registry)
+type = "int"
+min = 8
+max = 32
+default = 13
+scope = "user"
+title = "Font size"
+description = "Terminal font size in points."
 ```
+
+`[settings.<name>]` registers the key `<app id>.<name>` (`dev.lattice.terminal.font_size`). Fields, types, and scopes: [specs/10-settings.md](../specs/10-settings.md) › Data. The scope `worker` is platform-only. An app reads only its own namespace. TBD: the host call that reads settings, and whether runners or only viewers get it.
 
 ## Kinds
 

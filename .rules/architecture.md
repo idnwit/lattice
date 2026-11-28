@@ -28,7 +28,7 @@ Row 0 is the top. A crate depends only on crates in lower rows.
 | 2 | ui | `lattice-deck-ui` (NSH components, desktop and mobile layouts, tokens; `examples/` gallery) |
 | 2 | adapter | `lattice-quic` (magic socket + quinn), `lattice-wasm` (wasmtime host for runner packages, ABI v0) |
 | 3 | core | `lattice-sync` (streams, compaction, Loro allowed), `lattice-layout` |
-| 4 | contract | `lattice-transport` (traits, path-selection FSM), `lattice-sync-proto` (sync wire messages, framing), `lattice-identity`, `lattice-app` (App trait, `Ctx`, instance records), `lattice-app-wit` (WIT, view-tree types), `lattice-relay-proto` (codec, token table, relay engine) |
+| 4 | contract | `lattice-transport` (traits, path-selection FSM), `lattice-sync-proto` (sync wire messages, framing), `lattice-identity`, `lattice-app` (App trait, `Ctx`, instance records), `lattice-app-wit` (WIT, view-tree types), `lattice-relay-proto` (codec, token table, relay engine), `lattice-control` (worker control socket codec, worker config model, `worker/` lock) |
 | 5 | base | `lattice-key` (`NodeId`, node key), `lattice-state` + `lattice-state-macros` (synced types, derive), `lattice-proc-ipc` (frozen: TLV codec, v1 fixtures) |
 
 Layer 1 (platform foundation) crates exist as skeletons: rows 0–2 and 4–5 above, minus `lattice-identity`, `lattice-app-wit`, `lattice-vt`, `lattice-wasm`, `lattice-sync`, `lattice-layout`. Map: [docs/architecture/09-platform-l1.md](../docs/architecture/09-platform-l1.md).

@@ -11,19 +11,26 @@ publish.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 lattice-app.workspace = true
+# Control socket codec and config.toml (specs/10, specs/11).
+lattice-control.workspace = true
 lattice-key.workspace = true
 lattice-package.workspace = true
 lattice-quic.workspace = true
+# HomeRelay for the relay-mode transport config.
+lattice-transport.workspace = true
 lattice-wasm.workspace = true
 lattice-worker.workspace = true
 # getuid: the per-user runtime dir (specs/01-pairing.md, Files).
 rustix.workspace = true
-tokio.workspace = true
+# `io-util`: control socket reads and writes.
+tokio = { workspace = true, features = ["io-util"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 lattice-builtin-apps.workspace = true
+# Paused time for the control request timeout test.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

@@ -30,6 +30,25 @@ const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 /// with `transport.unreachable` (01-transport.md, Connect sequence rule 3).
 const REGISTER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Moves a relay-mode transport to another home relay (specs/10-settings.md, rule 35).
+///
+/// Holds no strong reference: the transport stays owned by its host.
+#[derive(Debug, Clone)]
+pub struct HomeRelayHandle(std::sync::Weak<MagicSocket>);
+
+impl HomeRelayHandle {
+    /// Registers at `relay` from now on, on the same UDP socket. Connections through the
+    /// old relay stop carrying packets. Returns `false` when the transport is gone.
+    pub fn set(&self, relay: HomeRelay) -> bool {
+        let Some(socket) = self.0.upgrade() else {
+            return false;
+        };
+        tracing::info!(relay = %relay.addr(), "home relay changed: registering there");
+        socket.set_home_relay(relay);
+        true
+    }
+}
+
 /// A bound node: one UDP socket and one quinn endpoint.
 ///
 /// Relay mode dials every peer at its virtual address through the magic socket.
@@ -121,6 +140,13 @@ impl QuicTransport {
         {
             tracing::debug!("shutdown: peers not told within the wait");
         }
+    }
+
+    /// A handle that moves the relay registration to another home relay while this
+    /// transport serves. `None` in direct-only mode, which has no relay to move.
+    pub fn home_relay_handle(&self) -> Option<HomeRelayHandle> {
+        let socket = self.socket.as_ref()?;
+        Some(HomeRelayHandle(Arc::downgrade(socket)))
     }
 
     /// Records where `peer` listens. Direct mode dials only known peers.

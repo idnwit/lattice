@@ -16,11 +16,12 @@ There is no account server. The only hosted piece is the **relay**: a public UDP
 ## Relay
 
 1. Stateless except the registration table (`token → node_id, addr, expiry`).
-2. Discovery is implicit: a node is reachable at its home relay. The home relay URL travels in the invite (specs/01-pairing.md) and the user Doc.
+2. Discovery is implicit: a node is reachable at its public address on its home relay. The address travels in the invite (specs/01-pairing.md › Contact; specs/02-connectivity.md rule 17), the worker list, and the user Doc.
 3. Sees only: NodeIds, addresses, packet sizes, timing. Never content.
 4. Rate limits per token on the public relay. Not needed in v1.
 5. Regional placement matters for relay-path latency. TBD: first region.
-6. TBD: relay federation — can a deck reach a worker whose home relay differs? (v1: both register on the same relay.)
+6. Peers on different home relays connect: the dialer registers at the target's relay (D49; 01-transport.md › Connect sequence). Relays never talk to each other.
+7. Each node picks its home relay: a self-hosted one or `none` (specs/10-settings.md). The default is `none` until a public relay exists. TBD: public relay host.
 
 ## What this replaces
 

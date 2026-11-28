@@ -12,6 +12,7 @@ publish = false
 [workspace.dependencies]
 # Internal crates (rows in .rules/architecture.md; edges in brickie.toml).
 lattice-key = { path = "crates/lattice-key" }
+lattice-control = { path = "crates/lattice-control" }
 lattice-proc-ipc = { path = "crates/lattice-proc-ipc" }
 lattice-transport = { path = "crates/lattice-transport" }
 lattice-relay-proto = { path = "crates/lattice-relay-proto" }

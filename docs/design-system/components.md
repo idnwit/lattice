@@ -71,6 +71,7 @@ Row 3: agent chips — running: `agent/bg` fill, `agent/fg` text, diamond; idle:
 ## Worker rail
 
 Vertical list of 2-letter monograms (`B1`, `G2`, `MM`) plus `∗` (all workers). Each shows a state glyph and a `waiting` count badge. `⌘1–9` selects.
+The Settings button (`gear` icon, same size as a rail entry, `r/6`, `aria-label="Settings"`) is pinned to the bottom, below a 1px `line` divider `sp/6` wide. Active (Settings tab focused): `bg/2` + 1px `line/strong` border + 2px left bar in `fg/muted` (≥ 3:1 non-text contrast on `bg/0`). Never `accent`: the accent bar marks the active worker.
 
 ## Port row
 
@@ -122,9 +123,42 @@ Row variant in lists: `waiting/bg` fill.
 
 TBD: architecture removes the cloud as a sync server. Labels should become `sync · …` (specs/02-connectivity.md). Pending canvas update.
 
+## Relay RTT level
+
+`signal-bars` glyph + `mono/meta`: `relay rtt · 23ms`. Four levels, filled-bar count + hue (tokens.md › Relay RTT level): `rtt/good` 3 bars, `rtt/fair` 2, `rtt/poor` 1, `rtt/down` empty bars with a cross. Never a dot or ring: those mean link type. The down level reads `relay · down` or the registration state (`registering`, `failed · <code>`). `aria-label` names the level and the value.
+
+## Link chip
+
+Height `row/xs`, `bg/1`, 1px `line`, `r/3`, `mono/meta` in `fg/muted`. Content: link glyph (online dot for direct, relay ring for relay) + `direct · 18ms` or `relay · 64ms`; a relay link appends `· via <relay host>`. Used in Settings › Connectivity › Status and the worker settings header.
+
+## Settings row
+
+Grid `minmax(0, 1fr) 320px`, gap `sp/6`, padding `sp/3` (`sp/4` left), bottom `line/subtle`. Mobile: one column, min height `row/touch`.
+
+| Part | Shape |
+|---|---|
+| Title | `body`, `fg`, 600, after a dim breadcrumb (`Terminal › `) |
+| Key id | `mono/meta` (`dev.lattice.terminal.font_size`). Selectable |
+| Description | `body`, `fg/muted` |
+| Control | Per type (specs/10-settings.md › Types): Toggle, stepper, dropdown, Input, chips. Height `row/md` |
+| Scope tag | Optional `label`-style chip (`User`, `This deck`) on rows that allow a device override |
+
+States:
+
+| State | Shape |
+|---|---|
+| default | as above |
+| modified | 2px left bar in `fg/muted` + `mono/meta` text `modified · default <value>` in `fg/muted`. No dot, no state hue: the text carries the meaning. Reset `↺` (icon button, `aria-label="Reset"`) beside the control |
+| error | Control border `error`. Under it: `error` square glyph + code (`mono/meta`, `error`) + message (`fg`). The stored value stays in effect |
+| read-only | Value in a box with a 1px dashed `line/strong` border on `bg/0`, `lock` icon, mono `fg/term`. No focus ring, `aria-readonly="true"` |
+
+## Read-only notice
+
+`bg/1`, 1px `line/strong`, `r/6`, padding `sp/3`. `lock` icon · bold lead ("Read-only on the deck.") · hint · the command (Invite command style, `❯ lattice config set <key> <value>`) with `Copy ⌘⇧C` · source meta (`from <path> · read 12s ago`, `mono/meta`).
+
 ## Invite command
 
-Mono 12px, `bg/0` + `line`, `r/4`, padding `sp/3`, wraps anywhere. Text `lattice add-deck lattice1:…` with the accent `❯` before it. `Copy` beside it. Replaces the 6-character pairing code (D47).
+Mono 12px, `bg/0` + `line`, `r/4`, padding `sp/3`, wraps anywhere. Text `echo lattice1:… | lattice add-deck` (proposed; specs/01 UI rule 5) with the accent `❯` before it. `Copy` beside it. Replaces the 6-character pairing code (D47).
 
 ## Progress meter
 

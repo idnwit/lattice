@@ -1696,6 +1696,7 @@ dependencies = [
  "lattice-app-echo",
  "lattice-app-terminal",
  "lattice-builtin-apps",
+ "lattice-control",
  "lattice-deck-core",
  "lattice-key",
  "lattice-quic",
@@ -1762,6 +1763,20 @@ version = "0.1.0"
 dependencies = [
  "lattice-app",
  "lattice-package",
+ "toml 1.2.2+spec-1.1.0",
+]
+
+[[package]]
+name = "lattice-control"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "lattice-key",
+ "postcard",
+ "proptest",
+ "rustix",
+ "serde",
+ "thiserror",
  "toml 1.2.2+spec-1.1.0",
 ]
 
@@ -1964,9 +1979,11 @@ dependencies = [
  "clap",
  "lattice-app",
  "lattice-builtin-apps",
+ "lattice-control",
  "lattice-key",
  "lattice-package",
  "lattice-quic",
+ "lattice-transport",
  "lattice-wasm",
  "lattice-worker",
  "rustix",

@@ -19,6 +19,10 @@
 //! `lattice attach`: a `terminal` instance in the local terminal (specs/03-sessions.md,
 //! Attach). Creates one, or `--iid` attaches to an existing one. `Ctrl-\` detaches.
 //!
+//! `lattice config list|get|set|reset|edit`: the worker config (specs/10-settings.md, CLI).
+//! Asks the running `latticed` over its control socket; without one, it reads the file, or
+//! writes it while holding the `worker/` lock.
+//!
 //! `lattice probe-echo`: creates an `echo` instance, sends one line through the
 //! typed client, and prints the returned seq and the lines it receives as state.
 //! Proves an app with no process end to end (D40).
@@ -27,6 +31,7 @@
 #![allow(clippy::print_stdout)]
 
 mod attach;
+mod config;
 mod probe;
 
 use std::path::PathBuf;
@@ -89,6 +94,11 @@ enum Cmd {
         #[arg(long)]
         iid: Option<u64>,
     },
+    /// Worker: show or change this worker's config (`config.toml`).
+    Config {
+        #[command(subcommand)]
+        cmd: config::ConfigCmd,
+    },
     /// Open an echo instance on the worker, send `text`, print the lines.
     ProbeEcho {
         /// Text of the line to send.
@@ -110,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Attach { iid } => attach::attach(worker, iid).await,
         Cmd::Probe { command, exit, iid } => probe::probe(worker, &command, exit, iid).await,
         Cmd::ProbeEcho { text } => probe::probe_echo(worker, &text).await,
+        Cmd::Config { cmd } => config::run(cmd, &data_dir()?).await,
     }
 }
 

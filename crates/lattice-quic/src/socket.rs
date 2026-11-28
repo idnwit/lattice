@@ -39,9 +39,9 @@ pub(crate) struct MagicSocket {
     udp: tokio::net::UdpSocket,
     /// The socket is IPv6: quinn then sees every peer as v4-mapped (quinn `ensure_ipv6`).
     v6: bool,
-    relay_addr: SocketAddr,
     start: Instant,
-    relay: Mutex<RelayClient>,
+    /// The home relay: its address and its registration FSM, replaced together.
+    relay: Mutex<Home>,
     vaddrs: Mutex<VirtualAddrs>,
     registered: watch::Sender<bool>,
     /// Wakes the registrar early (NAT rebinding: register now).
@@ -55,9 +55,8 @@ impl MagicSocket {
         Self {
             udp,
             v6,
-            relay_addr: relay.addr(),
             start: Instant::now(),
-            relay: Mutex::new(RelayClient::new(relay.relay_id())),
+            relay: Mutex::new(Home::new(relay)),
             vaddrs: Mutex::new(VirtualAddrs::default()),
             registered: watch::Sender::new(false),
             wake: Arc::new(Notify::new()),
@@ -69,6 +68,15 @@ impl MagicSocket {
         let sock = Arc::downgrade(self);
         let wake = self.wake.clone();
         tokio::spawn(registrar(sock, wake, key));
+    }
+
+    /// Moves the registration to `relay` (specs/10-settings.md, rule 35): a fresh
+    /// `RelayClient` registers there at once. Datagrams from the old relay are dropped from
+    /// now on; its binding expires on its own (01-transport.md, Relay rule 9).
+    pub(crate) fn set_home_relay(&self, relay: HomeRelay) {
+        *lock(&self.relay) = Home::new(relay);
+        self.registered.send_replace(false);
+        self.wake.notify_one();
     }
 
     /// The address quinn knows `peer` by, in the socket's family. `None` when no
@@ -104,8 +112,10 @@ impl MagicSocket {
     async fn drive_relay(&self, key: &NodeKey) -> Duration {
         let now = self.now();
         let mut out = Vec::new();
-        {
-            let mut c = lock(&self.relay);
+        let relay_addr = {
+            let mut home = lock(&self.relay);
+            let addr = home.addr;
+            let c = &mut home.client;
             if c.poll_register(now) {
                 match tls::random_nonce() {
                     Some(nonce) => c.register(key, nonce, unix_secs(), &mut out),
@@ -119,23 +129,27 @@ impl MagicSocket {
                 let was = std::mem::replace(r, c.is_registered());
                 was != *r
             });
-        }
+            addr
+        };
         if !out.is_empty()
-            && let Err(e) = self.udp.send_to(&out, self.relay_addr).await
+            && let Err(e) = self.udp.send_to(&out, relay_addr).await
         {
             // UDP is best effort: the next deadline retries.
             tracing::debug!(error = %e, "relay send failed");
         }
-        lock(&self.relay).next_deadline().unwrap_or(now)
+        lock(&self.relay).client.next_deadline().unwrap_or(now)
     }
 
     /// What quinn sees of one received datagram: the virtual source and the packet range.
     fn demux(&self, src: SocketAddr, bytes: &[u8]) -> Option<(SocketAddr, Range<usize>)> {
-        if !same_endpoint(src, self.relay_addr) || classify(bytes) != Datagram::Relay {
-            // Direct QUIC needs a validated path (M2.5). Rule 10: drop.
-            return None;
-        }
-        let event = lock(&self.relay).on_datagram(self.now(), bytes)?;
+        let event = {
+            let mut home = lock(&self.relay);
+            if !same_endpoint(src, home.addr) || classify(bytes) != Datagram::Relay {
+                // Direct QUIC needs a validated path (M2.5). Rule 10: drop.
+                return None;
+            }
+            home.client.on_datagram(self.now(), bytes)?
+        };
         match event {
             ClientEvent::Packet { src, packet } => Some((self.virtual_addr(src)?, packet)),
             ClientEvent::Registered { observed } => {
@@ -156,6 +170,22 @@ impl MagicSocket {
             }
             // Hole punching lands in M2.5.
             ClientEvent::PunchGo { .. } => None,
+        }
+    }
+}
+
+/// The home relay's address and its registration FSM.
+#[derive(Debug)]
+struct Home {
+    addr: SocketAddr,
+    client: RelayClient,
+}
+
+impl Home {
+    fn new(relay: HomeRelay) -> Self {
+        Self {
+            addr: relay.addr(),
+            client: RelayClient::new(relay.relay_id()),
         }
     }
 }
@@ -189,14 +219,19 @@ impl AsyncUdpSocket for MagicSocket {
             return Ok(());
         };
         let mut out = Vec::with_capacity(SEND_HEADER_LEN.saturating_add(transmit.contents.len()));
-        if lock(&self.relay)
-            .wrap_send(peer, transmit.contents, &mut out)
-            .is_none()
-        {
-            // Not registered yet: quinn retransmits once the registration holds.
-            return Ok(());
-        }
-        self.udp.try_send_to(&out, self.relay_addr).map(drop)
+        let relay_addr = {
+            let home = lock(&self.relay);
+            if home
+                .client
+                .wrap_send(peer, transmit.contents, &mut out)
+                .is_none()
+            {
+                // Not registered yet: quinn retransmits once the registration holds.
+                return Ok(());
+            }
+            home.addr
+        };
+        self.udp.try_send_to(&out, relay_addr).map(drop)
     }
 
     fn poll_recv(

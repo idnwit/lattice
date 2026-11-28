@@ -26,6 +26,9 @@ Adapted from luvox `VERIFICATION.md` and `formal-verification.md`, scaled down.
 | Sync log validation ([02](../docs/architecture/02-sync.md)) | `seq` contiguous, `prev_hash` chain holds, signature checked | fuzz decoder, proptest | first code |
 | Snapshot and compaction (02) | `fold(snapshot + tail) == fold(all)`. Resume loses and duplicates nothing | proptest oracle; Stateright 2–3 nodes | Stateright planned |
 | `Doc` / Loro (02) | Any order or duplication of writer logs converges | proptest permutations | first code |
+| Relay client pin FSM (01, Relay rules 24–28; [specs/10](../docs/specs/10-settings.md) › Invariants) | Id adopted only from a nonce-matched `COOKIE`. One mismatch never stops registration. All-zero cookie without an expected id. A pin for another host is ignored; an explicit id is never overwritten. Config writes serialized | proptest, unit tests | pin and write rules: unit tests (M2.11). FSM: planned (M2.8) |
+| Worker control socket codec ([specs/11](../docs/specs/11-control-socket.md)) | No panic on frames. Unknown type gives `Failed{control.unsupported}`. Frame > 64 KiB closes | fuzz `control_decode`, proptest | proptest (M2.11). Fuzz: planned |
+| Pairing codec and invite code (specs/01) | No panic on bytes. Frame > 4 KiB refused. Invite and `Contact` roundtrip; non-canonical host rejected | fuzz `pair_request_decode`, proptest `invite_code_roundtrips` | planned (M2.9) |
 | Path selection FSM (01) | Relay fallback after 2 s of direct silence. No flapping | deterministic simulation, logical clock | first code |
 | `latticed` shared state | Only if custom lock-free or atomic code appears | loom | if needed |
 

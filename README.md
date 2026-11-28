@@ -58,7 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/idnwit/lattice/main/install.sh | sh
 | `deck` | `Lattice.app` into `~/Applications` | macOS arm64 |
 | `all` | all of the above that the platform has | |
 
-Options: `--version dev|latest|vX.Y.Z`, `--bin-dir DIR`, `--app-dir DIR`, `--dry-run`. The relay also ships as an image:
+Options: `--version dev|latest|vX.Y.Z`, `--bin-dir DIR`, `--app-dir DIR`, `--dry-run`, `--relay URL|none` (the worker's home relay; asked on the terminal otherwise), `--no-service` (skip the worker's user services). See [docs/specs/10-settings.md](docs/specs/10-settings.md), Install. The relay also ships as an image:
 
 ```sh
 docker run -d -p 7400:7400/udp -v lattice-relay:/data ghcr.io/idnwit/lattice-relay:latest

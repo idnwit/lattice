@@ -28,7 +28,7 @@ Pane    *─1 AppInstance
 7. A shell that exits (`exit`, `Ctrl-D`, crash) closes its pane at once, with no confirmation. TBD: the canvas shows `exited 1 · 12m ago` in the session row; drop it, or keep a short notice?
 8. `Kill session` is destructive and needs confirmation.
 9. Tab and session glyph = state of the busiest pane (see design-system tokens.md › State).
-10. CLI: `lattice session <name>` attaches from the worker shell. TBD: full CLI.
+10. CLI: `lattice session <name>` attaches from the worker shell. Dropped (D53), effective M2.9: the `lattice` CLI has only `add-deck` and `config`.
 11. The `+` new-tab menu lists the installed apps. Picking one sends `create` and opens a new tab with that instance. No params form in v1. M1 PoC apps: `Echo`, `Terminal`.
 12. Split right and split down open an empty pane with an app picker (the same list as `+`). Nothing is created until the user picks an app. Closing an empty pane needs no confirmation.
 13. Closing a pane by the user asks for confirmation: the instance stops and its history is deleted.
@@ -50,6 +50,8 @@ TBD: design canvas and simulator update for the app picker and the mobile region
 - Sessions drawer groups sessions by worker.
 
 ## Attach (CLI)
+
+Dropped (D53), effective M2.9: the deck is GUI-only. Kept so code and test references resolve until the code is removed.
 
 `lattice attach` is a minimal deck in a local terminal: it shows one `terminal` instance on a paired worker and sends it keys (ROADMAP M1.7).
 
@@ -78,6 +80,8 @@ TBD: design canvas and simulator update for the app picker and the mobile region
 
 ## Probe (CLI, M1 experiment)
 
+Dropped (D53), effective M2.9. Kept so code and test references resolve until the code is removed.
+
 `lattice probe [<command>] [--exit] [--iid <iid>]` checks a worker end to end without a GUI (ROADMAP M1.8).
 
 1. A new instance starts in the worker's default cwd, like attach (rule 4). The deck never sends a path from its own machine.
@@ -98,4 +102,4 @@ TBD: design canvas and simulator update for the app picker and the mobile region
 
 - TBD: max panes per tab?
 - TBD: scrollback size and whether it persists across worker restart.
-- TBD: concurrent attach from two devices — shared cursor, resize policy (smallest wins?).
+- TBD: one instance viewed from two decks — shared cursor, resize policy (smallest wins?).

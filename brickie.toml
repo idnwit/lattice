@@ -142,6 +142,12 @@ members = ["path:crates/lattice-builtin-apps/"]
 tags = ["contract"]
 desc = "Built-in app packages (D44): build.rs builds apps/* to wasm, packs them with app.toml, embeds them for the deck"
 
+[[brick]]
+name = "control"
+members = ["path:crates/lattice-control/"]
+tags = ["contract"]
+desc = "Worker control socket codec (specs/11) and worker config model: config.toml keys, canonical host, relay URL, precedence (specs/10). Sans-IO"
+
 [[rule]]
 from = "tag:bin"
 to = "tag:adapter"
@@ -830,6 +836,24 @@ from = "worker"
 to = "sync-proto"
 kinds = ["reexports"]
 reason = "re-exports Invite for latticed add-deck"
+
+[[link]]
+from = "control"
+to = "key"
+kinds = ["uses"]
+reason = "relay ids are NodeIds"
+
+[[link]]
+from = "latticed"
+to = "control"
+kinds = ["uses"]
+reason = "serves the control socket, reads and writes config.toml"
+
+[[link]]
+from = "cli"
+to = "control"
+kinds = ["uses"]
+reason = "lattice config: control requests, or the file itself with no daemon"
 
 [[complexity]]
 bricks = "*"

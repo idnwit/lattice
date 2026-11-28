@@ -255,11 +255,7 @@ pub fn encode(msg: &RelayMsg<'_>, out: &mut Vec<u8>) {
         RelayMsg::Send { token, dst, packet } => {
             put_token_node(MsgKind::Send, *token, *dst, packet, out);
         }
-        RelayMsg::Recv { src, packet } => {
-            out.push(MsgKind::Recv as u8);
-            out.extend_from_slice(src.as_bytes());
-            out.extend_from_slice(packet);
-        }
+        RelayMsg::Recv { src, packet } => put(MsgKind::Recv, &[src.as_bytes(), packet], out),
         RelayMsg::PunchReq {
             token,
             dst,
@@ -269,12 +265,11 @@ pub fn encode(msg: &RelayMsg<'_>, out: &mut Vec<u8>) {
             peer,
             candidates,
             punch_nonce,
-        } => {
-            out.push(MsgKind::PunchGo as u8);
-            out.extend_from_slice(peer.as_bytes());
-            out.extend_from_slice(candidates);
-            out.extend_from_slice(punch_nonce);
-        }
+        } => put(
+            MsgKind::PunchGo,
+            &[peer.as_bytes(), candidates, punch_nonce],
+            out,
+        ),
     }
 }
 
